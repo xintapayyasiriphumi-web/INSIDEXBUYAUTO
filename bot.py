@@ -280,9 +280,9 @@ class PaymentView(discord.ui.View):
             description=(
                 f"**สินค้า :** 🎨 ReShade\n"
                 f"**ยอด : ฿{PRICE}**\n\n"
-                f"```\nธนาคาร    : {BANK_NAME}\n"
+                f"```\nธนาคาร : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
+                f"เลขบัญชี : {BANK_ACC_NO}\n```\n"
                 f"🔖 Order ID : `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
