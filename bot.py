@@ -41,7 +41,7 @@ TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 
 PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
-SHOP_BANNER_URL   = "https://media.discordapp.net/attachments/1446487555091730544/1496205094138417262/34.png?ex=69f58f54&is=69f43dd4&hm=651c7c427f0a50c10f9da927f9efd792ef6ada0ca653c1f2e6ba089e011a5b24&=&format=webp&quality=lossless&width=928&height=283"
+SHOP_BANNER_URL   = "https://cdn.discordapp.com/attachments/1446487555091730544/1499837254078697643/21.png?ex=69f63fcb&is=69f4ee4b&hm=03af46f901158128aa3e5758cca55bdd53059f754d9b5b834b2ba77f3503830f&"
 TH                = timezone(timedelta(hours=7))
 PURPLE            = 0x7b2cbf
 
@@ -51,17 +51,17 @@ PURPLE            = 0x7b2cbf
 ROLE_RESHADE_ID = int(os.getenv("ROLE_RESHADE", "0"))
 
 DOWN_ROLES = [
-    {"label": "down-dotashd.v1", "env": "ROLE_DOWN_DOTASHD_V1"},
-    {"label": "down-dotashd.v2", "env": "ROLE_DOWN_DOTASHD_V2"},
-    {"label": "down-dotashd.wf",  "env": "ROLE_DOWN_DOTASHD_WF"},
-    {"label": "down-dotashd.v3", "env": "ROLE_DOWN_DOTASHD_V3"},
-    {"label": "down-dotasuns",   "env": "ROLE_DOWN_DOTASUNS"},
-    {"label": "down-dotashd.bw", "env": "ROLE_DOWN_DOTASHD_BW"},
-    {"label": "down-moretime",   "env": "ROLE_DOWN_MORETIME"},
-    {"label": "down-doinluv.01", "env": "ROLE_DOWN_DOINLUV_01"},
-    {"label": "down-doinluv.02", "env": "ROLE_DOWN_DOINLUV_02"},
-    {"label": "down-doinluv.03", "env": "ROLE_DOWN_DOINLUV_03"},
-    {"label": "down-doinluv.04", "env": "ROLE_DOWN_DOINLUV_04"},
+    {"label": "Moretime",   "env": "ROLE_DOWN_MORETIME"},
+    {"label": "Dotashd.v1", "env": "ROLE_DOWN_DOTASHD_V1"},
+    {"label": "Dotashd.v2", "env": "ROLE_DOWN_DOTASHD_V2"},
+    {"label": "Dotashd.wf",  "env": "ROLE_DOWN_DOTASHD_WF"},
+    {"label": "Dotashd.v3", "env": "ROLE_DOWN_DOTASHD_V3"},
+    {"label": "Dotasuns",   "env": "ROLE_DOWN_DOTASUNS"},
+    {"label": "Dotashd.bw", "env": "ROLE_DOWN_DOTASHD_BW"},
+    {"label": "Doinluv.01", "env": "ROLE_DOWN_DOINLUV_01"},
+    {"label": "Doinluv.02", "env": "ROLE_DOWN_DOINLUV_02"},
+    {"label": "Doinluv.03", "env": "ROLE_DOWN_DOINLUV_03"},
+    {"label": "Doinluv.04", "env": "ROLE_DOWN_DOINLUV_04"},
 ]
 
 def get_down_role_id(env_key: str) -> int:
@@ -361,7 +361,7 @@ async def _start_order(interaction: discord.Interaction):
     # ถ้ามี thread เดิมของ user อยู่แล้ว → ชี้ไปที่เดิม
     existing_thread_id = user_threads.get(member.id)
     if existing_thread_id:
-        existing = interaction.guild.get_channel(existing_thread_id)
+        existing = interaction.guild.get_thread(existing_thread_id)
         if existing:
             return await interaction.response.send_message(
                 f"❗ คุณมี order ค้างอยู่แล้ว → {existing.mention}",
@@ -459,7 +459,7 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
             title="🎮 เลือกยศ Reshade",
             description=(
                 "ยศ **Reshade** ถูกมอบให้แล้ว <a:1134verifiedanimated:1495470992452227103>\n\n"
-                "เลือกยศ **down-** ที่ต้องการ (เลือกได้หลายตัว)\n"
+                "เลือกยศ **down-** ที่ต้องการ 1 ตัว\n"
                 "*(รวมในราคา ฿39 แล้ว)*\n\n"
                 "⚠️ หลังเลือกแล้ว ห้องนี้จะถูกลบอัตโนมัติใน 5 วินาที"
             ),
@@ -474,11 +474,11 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
-    print(f"<a:1134verifiedanimated:1495470992452227103> INSIDEX Bot: {bot.user}")
+    print(f"✅ INSIDEX Bot: {bot.user}")
     bot.add_view(ShopEmbedView())
     try:
         synced = await bot.tree.sync()
-        print(f"<a:1134verifiedanimated:1495470992452227103> Synced {len(synced)} commands")
+        print(f"✅ Synced {len(synced)} commands")
     except Exception as e:
         print(f"❌ Sync error: {e}")
 
