@@ -5,7 +5,7 @@ INSIDEX Bot — ReShade Edition
 - ราคา 39.- รวมทุกอย่าง
 - OCR: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที (Claude Vision)
 - ป้องกันสลิปซ้ำ SHA-256
-- Auto-clear หลังจบ flow เหลือแค่ shop embed
+- Private Thread ต่อ 1 ลูกค้า — ไม่เห็นแชทของคนอื่น
 """
 
 import discord
@@ -43,8 +43,7 @@ PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 SHOP_BANNER_URL   = "https://media.discordapp.net/attachments/1446487555091730544/1496205094138417262/34.png?ex=69f58f54&is=69f43dd4&hm=651c7c427f0a50c10f9da927f9efd792ef6ada0ca653c1f2e6ba089e011a5b24&=&format=webp&quality=lossless&width=928&height=283"
 TH                = timezone(timedelta(hours=7))
-
-PURPLE = 0x7b2cbf
+PURPLE            = 0x7b2cbf
 
 # ─────────────────────────────────────────
 #  ROLES
@@ -71,28 +70,10 @@ def get_down_role_id(env_key: str) -> int:
 # ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-pending_orders: dict   = {}
-used_slip_hashes: set  = set()
-shop_embed_ids: dict   = {}  # channel_id → message_id ของ shop embed
-
-
-# ─────────────────────────────────────────
-#  AUTO-CLEAR: ลบทุกข้อความยกเว้น shop embed
-# ─────────────────────────────────────────
-async def auto_clear_channel(channel: discord.TextChannel):
-    """ลบข้อความทั้งหมดในห้อง ยกเว้น shop embed"""
-    shop_msg_id = shop_embed_ids.get(channel.id)
-
-    def should_delete(msg: discord.Message) -> bool:
-        # เก็บ shop embed ไว้
-        if shop_msg_id and msg.id == shop_msg_id:
-            return False
-        return True
-
-    try:
-        await channel.purge(limit=100, check=should_delete)
-    except Exception as e:
-        print(f"auto_clear error: {e}")
+pending_orders: dict  = {}   # order_id → order dict
+used_slip_hashes: set = set()
+shop_embed_ids: dict  = {}   # channel_id → message_id ของ shop embed
+user_threads: dict    = {}   # user_id → thread_id (กัน spam สร้าง thread ซ้ำ)
 
 
 # ─────────────────────────────────────────
@@ -168,7 +149,7 @@ async def ocr_slip(image_url: str) -> dict:
 
     receiver = res.get("found_receiver") or ""
     if BANK_ACC_NAME.lower() not in receiver.lower():
-        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ : {receiver or 'ไม่มี'})"}
+        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver or 'ไม่มี'})"}
 
     dt_str = res.get("found_datetime")
     if dt_str:
@@ -202,9 +183,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 #  VIEW: เลือกยศ down-
 # ─────────────────────────────────────────
 class DownRoleSelect(discord.ui.Select):
-    def __init__(self, order_id: str, channel_id: int):
-        self.order_id   = order_id
-        self.channel_id = channel_id
+    def __init__(self, order_id: str, thread_id: int):
+        self.order_id  = order_id
+        self.thread_id = thread_id
         options = [
             discord.SelectOption(label=r["label"], value=r["env"])
             for r in DOWN_ROLES
@@ -225,10 +206,11 @@ class DownRoleSelect(discord.ui.Select):
                 roles_to_add.append(role)
 
         if roles_to_add:
-            await interaction.user.add_roles(*roles_to_add, reason=f"INSIDEX down- {self.order_id}")
+            await interaction.user.add_roles(*roles_to_add, reason=f"INSIDEX {self.order_id}")
 
         chosen_labels = ", ".join(f"`{l}`" for l, _ in chosen)
 
+        # Log
         log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
             await log_ch.send(embed=discord.Embed(
@@ -244,80 +226,39 @@ class DownRoleSelect(discord.ui.Select):
 
         await interaction.response.edit_message(
             embed=discord.Embed(
-                title="🎉 เสร็จสมบูรณ์!",
+                title="<a:1134verifiedanimated:1495470992452227103> เสร็จสมบูรณ์!",
                 description=(
-                    f"ได้รับยศ **Reshade** + {chosen_labels} แล้ว!\n\n"
-                    "ขอบคุณที่ใช้บริการ INSIDEX 🙏\n"
-                    "หากมีปัญหาติดต่อแอดมินได้เลย"
+                    f"**ได้รับยศแล้ว :**\n"
+                    f"🎨 **Reshade** + {chosen_labels}\n\n"
+                    "━━━━━━━━━━━━━━━━\n"
+                    "ขอบคุณที่ใช้บริการ **INSIDEX** 🙏\n"
+                    "> ห้องนี้จะถูกลบใน 5 วินาที"
                 ),
                 color=PURPLE,
             ),
             view=None,
         )
 
-        # รอ 3 วินาที แล้ว auto-clear
-        await asyncio.sleep(3)
-        channel = interaction.guild.get_channel(self.channel_id)
-        if channel:
-            await auto_clear_channel(channel)
+        # ลบ thread หลังจบ 5 วินาที
+        await asyncio.sleep(5)
+        thread = interaction.guild.get_channel(self.thread_id)
+        if thread:
+            try:
+                await thread.delete()
+            except Exception:
+                pass
+        # เคลียร์ user_threads
+        user_threads.pop(interaction.user.id, None)
 
 
 class DownRoleView(discord.ui.View):
-    def __init__(self, order_id: str, channel_id: int):
+    def __init__(self, order_id: str, thread_id: int):
         super().__init__(timeout=300)
-        self.add_item(DownRoleSelect(order_id, channel_id))
+        self.add_item(DownRoleSelect(order_id, thread_id))
 
 
 # ─────────────────────────────────────────
-#  GRANT: Reshade ทันที + เปิด dropdown down-
-# ─────────────────────────────────────────
-async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
-    reshade_role = guild.get_role(ROLE_RESHADE_ID)
-    if reshade_role:
-        await member.add_roles(reshade_role, reason=f"INSIDEX {order_id}")
-
-    try:
-        await member.send(embed=discord.Embed(
-            title="<a:1134verifiedanimated:1495470992452227103> ได้รับยศ Reshade แล้ว!",
-            description=(
-                f"**Order ID:** `{order_id}`\n\n"
-                "🎉 ยศ **Reshade** ถูกมอบให้แล้ว!\n"
-                "กลับไปที่ server แล้วเลือกยศ **down-** เสริมที่ต้องการได้เลย 👇"
-            ),
-            color=PURPLE,
-        ))
-    except Exception:
-        pass
-
-    log_ch = guild.get_channel(LOG_CHANNEL_ID)
-    if log_ch:
-        e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
-        e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
-        e.add_field(name="ยอด",       value=f"฿{ocr['amount']}",                inline=True)
-        e.add_field(name="วิธีชำระ", value=method,                              inline=True)
-        e.add_field(name="Order ID",  value=f"`{order_id}`",                    inline=True)
-        e.add_field(name="ผู้รับ",    value=ocr["receiver"],                    inline=True)
-        e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
-        await log_ch.send(embed=e)
-
-    await channel.send(
-        content=member.mention,
-        embed=discord.Embed(
-            title="🎮 เลือกยศ Reshade",
-            description=(
-                "ยศ **Reshade** ถูกมอบให้แล้ว <a:1134verifiedanimated:1495470992452227103>\n\n"
-                "เลือกยศ **Reshade** ที่ต้องการ (เลือกได้หลายตัว)\n"
-                "*(รวมในราคา ฿39 แล้ว ไม่มีค่าใช้จ่ายเพิ่ม)*\n\n"
-                "<a:3773activedeveloperbadgeanimated:1495472484471013498> หลังเลือกแล้ว ห้องจะถูกเคลียอัตโนมัติ"
-            ),
-            color=PURPLE,
-        ),
-        view=DownRoleView(order_id, channel.id),
-    )
-
-
-# ─────────────────────────────────────────
-#  PAYMENT VIEWS
+#  PAYMENT VIEWS (ใช้ใน thread)
 # ─────────────────────────────────────────
 class PaymentView(discord.ui.View):
     def __init__(self, order_id: str):
@@ -341,9 +282,9 @@ class PaymentView(discord.ui.View):
                 f"**ยอด : ฿{PRICE}**\n\n"
                 f"```\nธนาคาร : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
+                f"เลขบัญชี : {BANK_ACC_NO}\n```\n"
                 f"🔖 Order ID : `{self.order_id}`\n\n"
-                "📸 **ส่งรูปสลิปในข้อความถัดไปได้เลย**\n"
+                "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
             color=PURPLE,
@@ -361,12 +302,15 @@ class PaymentView(discord.ui.View):
         embed = discord.Embed(
             title="💰 โอนผ่าน TrueMoney Wallet",
             description=(
-                f"**สินค้า :** 🎨 ReShade\n"
-                f"**ยอด : ฿{PRICE}**\n\n"
-                f"```\nเบอร์รับเงิน : {TRUE_NUMBER}\n```\n"
-                f"🔖 Order ID : `{self.order_id}`\n\n"
-                "📸 **ส่งรูปสลิปในข้อความถัดไปได้เลย**\n"
-                "ระบบตรวจอัตโนมัติ ~10 วินาที"
+                f"🎨 **ReShade Pack**\n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"💰 **ยอดชำระ : ฿{PRICE}**\n\n"
+                f"```\n"
+                f"เบอร์รับเงิน : {TRUE_NUMBER}\n"
+                f"```\n"
+                f"🔖 **Order ID :** `{{self.order_id}}`\n\n"
+                "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
+                "> ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
             color=PURPLE,
         )
@@ -381,8 +325,17 @@ class CancelView(discord.ui.View):
 
     @discord.ui.button(label="❌ ยกเลิก Order", style=discord.ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button):
-        pending_orders.pop(self.order_id, None)
-        await interaction.response.edit_message(content="❌ ยกเลิก Order แล้ว", embed=None, view=None)
+        order = pending_orders.pop(self.order_id, None)
+        user_threads.pop(interaction.user.id, None)
+        await interaction.response.edit_message(
+            content="❌ ยกเลิก Order แล้ว ห้องนี้จะถูกลบใน 5 วินาที",
+            embed=None, view=None
+        )
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete()
+        except Exception:
+            pass
 
 
 class ShopEmbedView(discord.ui.View):
@@ -399,31 +352,121 @@ class ShopEmbedView(discord.ui.View):
 
 
 # ─────────────────────────────────────────
-#  ORDER START
+#  ORDER START — สร้าง Private Thread
 # ─────────────────────────────────────────
 async def _start_order(interaction: discord.Interaction):
+    member   = interaction.user
+    channel  = interaction.channel
+
+    # ถ้ามี thread เดิมของ user อยู่แล้ว → ชี้ไปที่เดิม
+    existing_thread_id = user_threads.get(member.id)
+    if existing_thread_id:
+        existing = interaction.guild.get_channel(existing_thread_id)
+        if existing:
+            return await interaction.response.send_message(
+                f"❗ คุณมี order ค้างอยู่แล้ว → {existing.mention}",
+                ephemeral=True
+            )
+
     order_id = str(uuid.uuid4())[:8].upper()
+
+    # สร้าง Private Thread
+    try:
+        thread = await channel.create_thread(
+            name=f"🛒 {member.display_name} · {order_id}",
+            type=discord.ChannelType.private_thread,
+            invitable=False,   # ลูกค้าเชิญคนอื่นเข้าไม่ได้
+            auto_archive_duration=60,
+        )
+        await thread.add_user(member)
+    except discord.Forbidden:
+        return await interaction.response.send_message(
+            "❌ บอทไม่มีสิทธิ์สร้าง Thread กรุณาแจ้งแอดมิน", ephemeral=True
+        )
+
+    user_threads[member.id] = thread.id
+
     pending_orders[order_id] = {
-        "user_id":        interaction.user.id,
-        "user_name":      interaction.user.name,
-        "channel_id":     interaction.channel_id,
+        "user_id":        member.id,
+        "user_name":      member.name,
+        "thread_id":      thread.id,
         "status":         "pending_payment",
         "payment_method": None,
         "timestamp":      datetime.now(TH).isoformat(),
     }
+
+    # ส่ง embed ใน thread
     embed = discord.Embed(
         title="🛒 สั่งซื้อ ReShade",
         description=(
+            f"สวัสดี {member.mention}!\n\n"
             f"**ราคา :** ฿{PRICE}\n"
-            f"**Order ID :** `{order_id}`\n\n" 
+            f"**Order ID :** `{order_id}`\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade ที่ต้องการ** (เลือกได้หลายตัว รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **Reshade** เสริมได้หลายตัว (รวมในราคาแล้ว)\n\n"
             "เลือกวิธีชำระด้านล่าง"
         ),
         color=PURPLE,
     )
-    await interaction.response.send_message(embed=embed, view=PaymentView(order_id), ephemeral=True)
+    await thread.send(embed=embed, view=PaymentView(order_id))
+
+    # แจ้ง ephemeral ให้ลูกค้าไปที่ thread
+    await interaction.response.send_message(
+        f"<a:1134verifiedanimated:1495470992452227103> สร้างห้องส่วนตัวให้แล้ว → {thread.mention}",
+        ephemeral=True
+    )
+
+
+# ─────────────────────────────────────────
+#  GRANT: Reshade + dropdown down-
+# ─────────────────────────────────────────
+async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
+    reshade_role = guild.get_role(ROLE_RESHADE_ID)
+    if reshade_role:
+        await member.add_roles(reshade_role, reason=f"INSIDEX {order_id}")
+
+    # DM
+    try:
+        await member.send(embed=discord.Embed(
+            title="<a:1134verifiedanimated:1495470992452227103> ได้รับยศ Reshade แล้ว!",
+            description=(
+                f"**Order ID:** `{order_id}`\n\n"
+                "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ถูกมอบให้แล้ว!\n\n"
+                "> กลับไปที่ห้องส่วนตัวแล้วเลือกยศ **down-** ได้เลย"
+            ),
+            color=PURPLE,
+        ))
+    except Exception:
+        pass
+
+    # Log
+    log_ch = guild.get_channel(LOG_CHANNEL_ID)
+    if log_ch:
+        e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
+        e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
+        e.add_field(name="ยอด",       value=f"฿{ocr['amount']}",                inline=True)
+        e.add_field(name="วิธีชำระ", value=method,                              inline=True)
+        e.add_field(name="Order ID",  value=f"`{order_id}`",                    inline=True)
+        e.add_field(name="ผู้รับ",    value=ocr["receiver"],                    inline=True)
+        e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
+        await log_ch.send(embed=e)
+
+    # ส่ง dropdown เลือก down- ใน thread
+    await thread.send(
+        content=member.mention,
+        embed=discord.Embed(
+            title="🎮 เลือกยศ Reshade",
+            description=(
+                "ยศ **Reshade** ถูกมอบให้แล้ว <a:1134verifiedanimated:1495470992452227103>\n\n"
+                "เลือกยศ **down-** ที่ต้องการ (เลือกได้หลายตัว)\n"
+                "*(รวมในราคา ฿39 แล้ว)*\n\n"
+                "⚠️ หลังเลือกแล้ว ห้องนี้จะถูกลบอัตโนมัติใน 5 วินาที"
+            ),
+            color=PURPLE,
+        ),
+        view=DownRoleView(order_id, thread.id),
+    )
 
 
 # ─────────────────────────────────────────
@@ -431,11 +474,11 @@ async def _start_order(interaction: discord.Interaction):
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
-    print(f"✅ INSIDEX Bot: {bot.user}")
+    print(f"<a:1134verifiedanimated:1495470992452227103> INSIDEX Bot: {bot.user}")
     bot.add_view(ShopEmbedView())
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} commands")
+        print(f"<a:1134verifiedanimated:1495470992452227103> Synced {len(synced)} commands")
     except Exception as e:
         print(f"❌ Sync error: {e}")
 
@@ -445,12 +488,15 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    if message.attachments:
+    # รับสลิปเฉพาะใน thread ของ order
+    if isinstance(message.channel, discord.Thread) and message.attachments:
         att = message.attachments[0]
         if att.content_type and att.content_type.startswith("image/"):
             entry = next(
                 ((oid, o) for oid, o in pending_orders.items()
-                 if o["user_id"] == message.author.id and o["status"] == "waiting_slip"),
+                 if o["user_id"] == message.author.id
+                 and o.get("thread_id") == message.channel.id
+                 and o["status"] == "waiting_slip"),
                 None,
             )
             if entry:
@@ -458,8 +504,8 @@ async def on_message(message: discord.Message):
                 order["status"] = "verifying"
 
                 checking_msg = await message.reply(embed=discord.Embed(
-                    title="🔍 กำลังตรวจสลิป...",
-                    description="OCR กำลังอ่านข้อมูล รอ ~10 วินาที",
+                    title="🔍 กำลังตรวจสอบสลิป...",
+                    description="> OCR กำลังอ่านข้อมูล\n> กรุณารอสักครู่ (~10 วินาที)",
                     color=PURPLE,
                 ))
 
@@ -469,7 +515,7 @@ async def on_message(message: discord.Message):
                     order["status"] = "completed"
                     pending_orders.pop(order_id, None)
                     await checking_msg.edit(embed=discord.Embed(
-                        title="<a:1134verifiedanimated:1495470992452227103> สลิปผ่าน! กำลังมอบยศ Reshade...",
+                        title="<a:1134verifiedanimated:1495470992452227103> สลิปผ่าน! กำลังมอบยศ...",
                         description=(
                             f"**ยอด :** ฿{ocr['amount']}\n"
                             f"**ผู้รับ :** {ocr['receiver']}\n"
@@ -478,7 +524,7 @@ async def on_message(message: discord.Message):
                         color=PURPLE,
                     ))
                     await grant_reshade_and_pick(
-                        channel=message.channel,
+                        thread=message.channel,
                         guild=message.guild,
                         member=message.author,
                         order_id=order_id,
@@ -511,7 +557,7 @@ async def setup_shop(interaction: discord.Interaction):
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade** เสริม ได้หลายตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **Reshade** เสริมได้หลายตัว (รวมในราคาแล้ว)\n\n"
             "💳 รับชำระ : ธนาคาร / TrueMoney\n"
             "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
@@ -519,21 +565,9 @@ async def setup_shop(interaction: discord.Interaction):
     )
     embed.set_footer(text="INSIDEX | BUY AUTO ✨")
     embed.set_image(url=SHOP_BANNER_URL)
-    # ส่ง embed และบันทึก message_id ไว้
     shop_msg = await interaction.channel.send(embed=embed, view=ShopEmbedView())
     shop_embed_ids[interaction.channel_id] = shop_msg.id
-    await interaction.response.send_message("✅ วาง shop embed แล้ว", ephemeral=True)
-
-
-@bot.tree.command(name="clear", description="[Admin] ลบข้อความในห้อง ยกเว้น shop embed")
-@app_commands.describe(amount="จำนวนข้อความที่ต้องการลบ (สูงสุด 100, default 50)")
-async def clear(interaction: discord.Interaction, amount: int = 50):
-    if not any(r.id == ADMIN_ROLE_ID for r in interaction.user.roles):
-        return await interaction.response.send_message("❌ ไม่มีสิทธิ์", ephemeral=True)
-    amount = min(max(amount, 1), 100)
-    await interaction.response.defer(ephemeral=True)
-    await auto_clear_channel(interaction.channel)
-    await interaction.followup.send("🗑️ เคลียห้องแล้ว (เหลือแค่ shop embed)", ephemeral=True)
+    await interaction.response.send_message("<a:1134verifiedanimated:1495470992452227103> วาง shop embed แล้ว", ephemeral=True)
 
 
 @bot.tree.command(name="give_reshade", description="[Admin] มอบ Reshade + down- ให้ user")
@@ -544,18 +578,15 @@ async def clear(interaction: discord.Interaction, amount: int = 50):
 async def give_reshade(interaction: discord.Interaction, member: discord.Member, down_role: str):
     if not any(r.id == ADMIN_ROLE_ID for r in interaction.user.roles):
         return await interaction.response.send_message("❌ ไม่มีสิทธิ์", ephemeral=True)
-
     guild        = interaction.guild
     reshade      = guild.get_role(ROLE_RESHADE_ID)
     down         = guild.get_role(get_down_role_id(down_role))
     chosen_label = next(r["label"] for r in DOWN_ROLES if r["env"] == down_role)
-
     roles_to_add = [r for r in [reshade, down] if r]
     if roles_to_add:
         await member.add_roles(*roles_to_add)
-
     await interaction.response.send_message(
-        f"✅ มอบ **Reshade** + **{chosen_label}** ให้ {member.mention} แล้ว", ephemeral=True
+        f"<a:1134verifiedanimated:1495470992452227103> มอบ **Reshade** + **{chosen_label}** ให้ {member.mention} แล้ว", ephemeral=True
     )
     try:
         await member.send(embed=discord.Embed(
