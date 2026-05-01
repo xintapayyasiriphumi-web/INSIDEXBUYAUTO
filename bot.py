@@ -5,13 +5,14 @@ INSIDEX Bot — ReShade Edition
 - ราคา 39.- รวมทุกอย่าง
 - OCR: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที (Claude Vision)
 - ป้องกันสลิปซ้ำ SHA-256
-- คำสั่งซื้อ: กดปุ่มใน embed เท่านั้น
+- Auto-clear หลังจบ flow เหลือแค่ shop embed
 """
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 import aiohttp
+import asyncio
 import base64
 import hashlib
 import json
@@ -41,9 +42,8 @@ TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 SHOP_BANNER_URL   = "https://media.discordapp.net/attachments/1446487555091730544/1496205094138417262/34.png?ex=69f58f54&is=69f43dd4&hm=651c7c427f0a50c10f9da927f9efd792ef6ada0ca653c1f2e6ba089e011a5b24&=&format=webp&quality=lossless&width=928&height=283"
-TH    = timezone(timedelta(hours=7))
+TH                = timezone(timedelta(hours=7))
 
-# สีม่วงหลัก INSIDEX
 PURPLE = 0x7b2cbf
 
 # ─────────────────────────────────────────
@@ -71,8 +71,28 @@ def get_down_role_id(env_key: str) -> int:
 # ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-pending_orders: dict = {}
-used_slip_hashes: set = set()
+pending_orders: dict   = {}
+used_slip_hashes: set  = set()
+shop_embed_ids: dict   = {}  # channel_id → message_id ของ shop embed
+
+
+# ─────────────────────────────────────────
+#  AUTO-CLEAR: ลบทุกข้อความยกเว้น shop embed
+# ─────────────────────────────────────────
+async def auto_clear_channel(channel: discord.TextChannel):
+    """ลบข้อความทั้งหมดในห้อง ยกเว้น shop embed"""
+    shop_msg_id = shop_embed_ids.get(channel.id)
+
+    def should_delete(msg: discord.Message) -> bool:
+        # เก็บ shop embed ไว้
+        if shop_msg_id and msg.id == shop_msg_id:
+            return False
+        return True
+
+    try:
+        await channel.purge(limit=100, check=should_delete)
+    except Exception as e:
+        print(f"auto_clear error: {e}")
 
 
 # ─────────────────────────────────────────
@@ -182,8 +202,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 #  VIEW: เลือกยศ down-
 # ─────────────────────────────────────────
 class DownRoleSelect(discord.ui.Select):
-    def __init__(self, order_id: str):
-        self.order_id = order_id
+    def __init__(self, order_id: str, channel_id: int):
+        self.order_id   = order_id
+        self.channel_id = channel_id
         options = [
             discord.SelectOption(label=r["label"], value=r["env"])
             for r in DOWN_ROLES
@@ -191,18 +212,22 @@ class DownRoleSelect(discord.ui.Select):
         super().__init__(
             placeholder="🎮 เลือก Reshade ที่ต้องการ...",
             min_values=1,
-            max_values=1,
+            max_values=len(DOWN_ROLES),
             options=options,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        chosen_env   = self.values[0]
-        chosen_label = next(r["label"] for r in DOWN_ROLES if r["env"] == chosen_env)
-        role_id      = get_down_role_id(chosen_env)
-        role         = interaction.guild.get_role(role_id)
+        chosen = [(r["label"], r["env"]) for r in DOWN_ROLES if r["env"] in self.values]
+        roles_to_add = []
+        for label, env in chosen:
+            role = interaction.guild.get_role(get_down_role_id(env))
+            if role:
+                roles_to_add.append(role)
 
-        if role:
-            await interaction.user.add_roles(role, reason=f"INSIDEX down- {self.order_id}")
+        if roles_to_add:
+            await interaction.user.add_roles(*roles_to_add, reason=f"INSIDEX down- {self.order_id}")
+
+        chosen_labels = ", ".join(f"`{l}`" for l, _ in chosen)
 
         log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
@@ -211,7 +236,7 @@ class DownRoleSelect(discord.ui.Select):
                 description=(
                     f"**User:** {interaction.user.mention} ({interaction.user.name})\n"
                     f"**Order ID:** `{self.order_id}`\n"
-                    f"**ยศที่เลือก:** `{chosen_label}`"
+                    f"**ยศที่เลือก:** {chosen_labels}"
                 ),
                 color=PURPLE,
                 timestamp=datetime.now(),
@@ -221,7 +246,7 @@ class DownRoleSelect(discord.ui.Select):
             embed=discord.Embed(
                 title="🎉 เสร็จสมบูรณ์!",
                 description=(
-                    f"ได้รับยศ **Reshade** + **{chosen_label}** แล้ว!\n\n"
+                    f"ได้รับยศ **Reshade** + {chosen_labels} แล้ว!\n\n"
                     "ขอบคุณที่ใช้บริการ INSIDEX 🙏\n"
                     "หากมีปัญหาติดต่อแอดมินได้เลย"
                 ),
@@ -230,11 +255,17 @@ class DownRoleSelect(discord.ui.Select):
             view=None,
         )
 
+        # รอ 3 วินาที แล้ว auto-clear
+        await asyncio.sleep(3)
+        channel = interaction.guild.get_channel(self.channel_id)
+        if channel:
+            await auto_clear_channel(channel)
+
 
 class DownRoleView(discord.ui.View):
-    def __init__(self, order_id: str):
+    def __init__(self, order_id: str, channel_id: int):
         super().__init__(timeout=300)
-        self.add_item(DownRoleSelect(order_id))
+        self.add_item(DownRoleSelect(order_id, channel_id))
 
 
 # ─────────────────────────────────────────
@@ -247,7 +278,7 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
 
     try:
         await member.send(embed=discord.Embed(
-            title="✅ ได้รับยศ Reshade แล้ว!",
+            title="<a:1134verifiedanimated:1495470992452227103> ได้รับยศ Reshade แล้ว!",
             description=(
                 f"**Order ID:** `{order_id}`\n\n"
                 "🎉 ยศ **Reshade** ถูกมอบให้แล้ว!\n"
@@ -274,13 +305,14 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
         embed=discord.Embed(
             title="🎮 เลือกยศ Reshade",
             description=(
-                "ยศ **Reshade** ถูกมอบให้แล้ว ✅\n\n"
-                "เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n"
-                "*(รวมในราคา ฿39 แล้ว ไม่มีค่าใช้จ่ายเพิ่ม)*"
+                "ยศ **Reshade** ถูกมอบให้แล้ว <a:1134verifiedanimated:1495470992452227103>\n\n"
+                "เลือกยศ **Reshade** ที่ต้องการ (เลือกได้หลายตัว)\n"
+                "*(รวมในราคา ฿39 แล้ว ไม่มีค่าใช้จ่ายเพิ่ม)*\n\n"
+                "<a:3773activedeveloperbadgeanimated:1495472484471013498> หลังเลือกแล้ว ห้องจะถูกเคลียอัตโนมัติ"
             ),
             color=PURPLE,
         ),
-        view=DownRoleView(order_id),
+        view=DownRoleView(order_id, channel.id),
     )
 
 
@@ -307,7 +339,7 @@ class PaymentView(discord.ui.View):
             description=(
                 f"**สินค้า :** 🎨 ReShade\n"
                 f"**ยอด : ฿{PRICE}**\n\n"
-                f"```\nธนาคาร    : {BANK_NAME}\n"
+                f"```\nธนาคาร : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
                 f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
                 f"🔖 Order ID : `{self.order_id}`\n\n"
@@ -383,10 +415,10 @@ async def _start_order(interaction: discord.Interaction):
         title="🛒 สั่งซื้อ ReShade",
         description=(
             f"**ราคา :** ฿{PRICE}\n"
-            f"**Order ID :** `{order_id}`\n\n"
+            f"**Order ID :** `{order_id}`\n\n" 
             "ซื้อแล้วได้ :\n"
-            "✅ ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade ที่ต้องการ** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
+            "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ทันที\n"
+            "🎮 เลือกยศ **Reshade ที่ต้องการ** (เลือกได้หลายตัว รวมในราคาแล้ว)\n\n"
             "เลือกวิธีชำระด้านล่าง"
         ),
         color=PURPLE,
@@ -437,7 +469,7 @@ async def on_message(message: discord.Message):
                     order["status"] = "completed"
                     pending_orders.pop(order_id, None)
                     await checking_msg.edit(embed=discord.Embed(
-                        title="✅ สลิปผ่าน! กำลังมอบยศ Reshade...",
+                        title="<a:1134verifiedanimated:1495470992452227103> สลิปผ่าน! กำลังมอบยศ Reshade...",
                         description=(
                             f"**ยอด :** ฿{ocr['amount']}\n"
                             f"**ผู้รับ :** {ocr['receiver']}\n"
@@ -479,7 +511,7 @@ async def setup_shop(interaction: discord.Interaction):
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **Reshade** เสริม ได้หลายตัว (รวมในราคาแล้ว)\n\n"
             "💳 รับชำระ : ธนาคาร / TrueMoney\n"
             "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
@@ -487,8 +519,21 @@ async def setup_shop(interaction: discord.Interaction):
     )
     embed.set_footer(text="INSIDEX | BUY AUTO ✨")
     embed.set_image(url=SHOP_BANNER_URL)
-    await interaction.channel.send(embed=embed, view=ShopEmbedView())
+    # ส่ง embed และบันทึก message_id ไว้
+    shop_msg = await interaction.channel.send(embed=embed, view=ShopEmbedView())
+    shop_embed_ids[interaction.channel_id] = shop_msg.id
     await interaction.response.send_message("✅ วาง shop embed แล้ว", ephemeral=True)
+
+
+@bot.tree.command(name="clear", description="[Admin] ลบข้อความในห้อง ยกเว้น shop embed")
+@app_commands.describe(amount="จำนวนข้อความที่ต้องการลบ (สูงสุด 100, default 50)")
+async def clear(interaction: discord.Interaction, amount: int = 50):
+    if not any(r.id == ADMIN_ROLE_ID for r in interaction.user.roles):
+        return await interaction.response.send_message("❌ ไม่มีสิทธิ์", ephemeral=True)
+    amount = min(max(amount, 1), 100)
+    await interaction.response.defer(ephemeral=True)
+    await auto_clear_channel(interaction.channel)
+    await interaction.followup.send("🗑️ เคลียห้องแล้ว (เหลือแค่ shop embed)", ephemeral=True)
 
 
 @bot.tree.command(name="give_reshade", description="[Admin] มอบ Reshade + down- ให้ user")
