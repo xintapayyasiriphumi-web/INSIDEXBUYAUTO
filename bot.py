@@ -433,7 +433,7 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
             description=(
                 f"**Order ID:** `{order_id}`\n\n"
                 "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ถูกมอบให้แล้ว!\n\n"
-                "> กลับไปที่ห้องส่วนตัวแล้วเลือกยศ **down-** ได้เลย"
+                "> กลับไปที่ห้องส่วนตัวแล้วเลือกยศ **Reshade ที่ต้องการได้เลย**"
             ),
             color=PURPLE,
         ))
@@ -459,7 +459,7 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
             title="🎮 เลือกยศ Reshade",
             description=(
                 "ยศ **Reshade** ถูกมอบให้แล้ว <a:1134verifiedanimated:1495470992452227103>\n\n"
-                "เลือกยศ **down-** ที่ต้องการ 1 ตัว\n"
+                "เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n"
                 "*(รวมในราคา ฿39 แล้ว)*\n\n"
                 "⚠️ หลังเลือกแล้ว ห้องนี้จะถูกลบอัตโนมัติใน 5 วินาที"
             ),
@@ -557,7 +557,7 @@ async def setup_shop(interaction: discord.Interaction):
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **down-** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n\n"
             "💳 รับชำระ : ธนาคาร / TrueMoney\n"
             "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
