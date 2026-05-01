@@ -402,9 +402,9 @@ async def _start_order(interaction: discord.Interaction):
             f"สวัสดี {member.mention}!\n\n"
             f"**ราคา :** ฿{PRICE}\n"
             f"**Order ID :** `{order_id}`\n\n"
-            "ซื้อแล้วได้ :\n"
+            "ของที่จะได้รับ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **down-** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **Reshade** ได้ 1 ตัว\n\n"
             "เลือกวิธีชำระด้านล่าง"
         ),
         color=PURPLE,
@@ -553,7 +553,7 @@ async def setup_shop(interaction: discord.Interaction):
         title="🎨 RESHADE AUTO BUY",
         description=(
             "**:shopping_cart: บริการจำหน่าย Reshade อัตโนมัติ**\n"
-            "ถ้าต้องการบริการลง Reshade สามารถกด https://discord.com/channels/1400021255528382526/1432715699138072699 มาได้เลยนะครับ\n\n"
+            "ถ้าต้องการบริการลง Reshade สามารถกด https://discord.com/channels/1400021255528382526/1432715699138072699 มาได้เลยนะครับ ค่า่บริการ **15.-**\n\n"
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
