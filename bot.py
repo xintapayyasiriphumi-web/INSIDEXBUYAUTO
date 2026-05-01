@@ -40,10 +40,11 @@ TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 
 PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
+SHOP_BANNER_URL   = "https://media.discordapp.net/attachments/1446487555091730544/1496205094138417262/34.png?ex=69f58f54&is=69f43dd4&hm=651c7c427f0a50c10f9da927f9efd792ef6ada0ca653c1f2e6ba089e011a5b24&=&format=webp&quality=lossless&width=928&height=283"
 TH    = timezone(timedelta(hours=7))
 
 # สีม่วงหลัก INSIDEX
-PURPLE = 0x5b2d8e
+PURPLE = 0x7b2cbf
 
 # ─────────────────────────────────────────
 #  ROLES
@@ -486,6 +487,7 @@ async def setup_shop(interaction: discord.Interaction):
         color=PURPLE,
     )
     embed.set_footer(text="INSIDEX | Auto Slip Verification ✨")
+    embed.set_image(url=SHOP_BANNER_URL)
     await interaction.channel.send(embed=embed, view=ShopEmbedView())
     await interaction.response.send_message("✅ วาง shop embed แล้ว", ephemeral=True)
 
