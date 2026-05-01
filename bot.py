@@ -193,7 +193,7 @@ class DownRoleSelect(discord.ui.Select):
         super().__init__(
             placeholder="🎮 เลือก Reshade ที่ต้องการ...",
             min_values=1,
-            max_values=len(DOWN_ROLES),
+            max_values=1,
             options=options,
         )
 
@@ -241,7 +241,7 @@ class DownRoleSelect(discord.ui.Select):
 
         # ลบ thread หลังจบ 5 วินาที
         await asyncio.sleep(5)
-        thread = interaction.guild.get_channel(self.thread_id)
+        thread = interaction.guild.get_thread(self.thread_id)
         if thread:
             try:
                 await thread.delete()
@@ -280,9 +280,9 @@ class PaymentView(discord.ui.View):
             description=(
                 f"**สินค้า :** 🎨 ReShade\n"
                 f"**ยอด : ฿{PRICE}**\n\n"
-                f"```\nธนาคาร : {BANK_NAME}\n"
+                f"```\nธนาคาร    : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี : {BANK_ACC_NO}\n```\n"
+                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
                 f"🔖 Order ID : `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
@@ -404,7 +404,7 @@ async def _start_order(interaction: discord.Interaction):
             f"**Order ID :** `{order_id}`\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade** เสริมได้หลายตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **down-** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
             "เลือกวิธีชำระด้านล่าง"
         ),
         color=PURPLE,
@@ -557,7 +557,7 @@ async def setup_shop(interaction: discord.Interaction):
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade** เสริมได้หลายตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **down-** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
             "💳 รับชำระ : ธนาคาร / TrueMoney\n"
             "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
