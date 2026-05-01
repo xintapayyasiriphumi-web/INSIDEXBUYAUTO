@@ -1,5 +1,5 @@
 """
-INSIDEX Bot — ReShade Pack Edition
+INSIDEX Bot — ReShade Edition
 - ซื้อแล้วได้ยศ Reshade ทันที
 - จากนั้นเลือกยศ down- เสริม 1 ตัว
 - ราคา 39.- รวมทุกอย่าง
@@ -41,6 +41,9 @@ TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 TH    = timezone(timedelta(hours=7))
+
+# สีม่วงหลัก INSIDEX
+PURPLE = 0x5b2d8e
 
 # ─────────────────────────────────────────
 #  ROLES
@@ -200,7 +203,6 @@ class DownRoleSelect(discord.ui.Select):
         if role:
             await interaction.user.add_roles(role, reason=f"INSIDEX down- {self.order_id}")
 
-        # Log
         log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
             await log_ch.send(embed=discord.Embed(
@@ -210,7 +212,7 @@ class DownRoleSelect(discord.ui.Select):
                     f"**Order ID:** `{self.order_id}`\n"
                     f"**ยศที่เลือก:** `{chosen_label}`"
                 ),
-                color=0x9b59b6,
+                color=PURPLE,
                 timestamp=datetime.now(),
             ))
 
@@ -222,7 +224,7 @@ class DownRoleSelect(discord.ui.Select):
                     "ขอบคุณที่ใช้บริการ INSIDEX 🙏\n"
                     "หากมีปัญหาติดต่อแอดมินได้เลย"
                 ),
-                color=0x00b894,
+                color=PURPLE,
             ),
             view=None,
         )
@@ -242,7 +244,6 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
     if reshade_role:
         await member.add_roles(reshade_role, reason=f"INSIDEX {order_id}")
 
-    # DM
     try:
         await member.send(embed=discord.Embed(
             title="✅ ได้รับยศ Reshade แล้ว!",
@@ -251,15 +252,14 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
                 "🎉 ยศ **Reshade** ถูกมอบให้แล้ว!\n"
                 "กลับไปที่ server แล้วเลือกยศ **down-** เสริมที่ต้องการได้เลย 👇"
             ),
-            color=0xe056a0,
+            color=PURPLE,
         ))
     except Exception:
         pass
 
-    # Log purchase
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if log_ch:
-        e = discord.Embed(title="💳 Purchase — ReShade", color=0x00b894, timestamp=datetime.now())
+        e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
         e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
         e.add_field(name="ยอด",       value=f"฿{ocr['amount']}",                inline=True)
         e.add_field(name="วิธีชำระ", value=method,                              inline=True)
@@ -268,7 +268,6 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
         e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
         await log_ch.send(embed=e)
 
-    # Dropdown เลือก down-
     await channel.send(
         content=member.mention,
         embed=discord.Embed(
@@ -278,7 +277,7 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
                 "เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n"
                 "*(รวมในราคา ฿39 แล้ว ไม่มีค่าใช้จ่ายเพิ่ม)*"
             ),
-            color=0x9b59b6,
+            color=PURPLE,
         ),
         view=DownRoleView(order_id),
     )
@@ -307,14 +306,14 @@ class PaymentView(discord.ui.View):
             description=(
                 f"**สินค้า :** 🎨 ReShade\n"
                 f"**ยอด : ฿{PRICE}**\n\n"
-                f"```\nธนาคาร : {BANK_NAME}\n"
+                f"```\nธนาคาร    : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี : {BANK_ACC_NO}\n"
+                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
                 f"🔖 Order ID : `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในข้อความถัดไปได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
-            color=0x00b894,
+            color=PURPLE,
         )
         embed.set_image(url=PAYMENT_IMAGE_URL)
         await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
@@ -336,7 +335,7 @@ class PaymentView(discord.ui.View):
                 "📸 **ส่งรูปสลิปในข้อความถัดไปได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
-            color=0xff6b35,
+            color=PURPLE,
         )
         embed.set_image(url=PAYMENT_IMAGE_URL)
         await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
@@ -358,7 +357,7 @@ class ShopEmbedView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🎨 ซื้อ ReShade Pack — ฿39",
+        label="🎨 ซื้อ ReShade — ฿39",
         style=discord.ButtonStyle.primary,
         custom_id="insidex_buy_reshade",
     )
@@ -389,7 +388,7 @@ async def _start_order(interaction: discord.Interaction):
             "🎮 เลือกยศ **Reshade ที่ต้องการ** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
             "เลือกวิธีชำระด้านล่าง"
         ),
-        color=0xe056a0,
+        color=PURPLE,
     )
     await interaction.response.send_message(embed=embed, view=PaymentView(order_id), ephemeral=True)
 
@@ -428,7 +427,7 @@ async def on_message(message: discord.Message):
                 checking_msg = await message.reply(embed=discord.Embed(
                     title="🔍 กำลังตรวจสลิป...",
                     description="OCR กำลังอ่านข้อมูล รอ ~10 วินาที",
-                    color=0xf39c12,
+                    color=PURPLE,
                 ))
 
                 ocr = await ocr_slip(att.url)
@@ -443,7 +442,7 @@ async def on_message(message: discord.Message):
                             f"**ผู้รับ :** {ocr['receiver']}\n"
                             f"**เวลาสลิป :** {ocr.get('slip_time') or '-'}"
                         ),
-                        color=0x00b894,
+                        color=PURPLE,
                     ))
                     await grant_reshade_and_pick(
                         channel=message.channel,
@@ -484,7 +483,7 @@ async def setup_shop(interaction: discord.Interaction):
             "💳 รับชำระ : ธนาคาร / PromptPay / TrueMoney\n"
             "⚡ ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
-        color=0xe056a0,
+        color=PURPLE,
     )
     embed.set_footer(text="INSIDEX | Auto Slip Verification ✨")
     await interaction.channel.send(embed=embed, view=ShopEmbedView())
@@ -516,7 +515,7 @@ async def give_reshade(interaction: discord.Interaction, member: discord.Member,
         await member.send(embed=discord.Embed(
             title="🎁 ได้รับสินค้าจากแอดมิน",
             description=f"ได้รับยศ **Reshade** + **{chosen_label}** แล้ว!\nขอบคุณที่ใช้บริการ INSIDEX 🙏",
-            color=0x00b894,
+            color=PURPLE,
         ))
     except Exception:
         pass
@@ -528,7 +527,7 @@ async def orders_cmd(interaction: discord.Interaction):
         return await interaction.response.send_message("❌ ไม่มีสิทธิ์", ephemeral=True)
     if not pending_orders:
         return await interaction.response.send_message("📭 ไม่มี pending orders", ephemeral=True)
-    embed = discord.Embed(title="📋 Pending Orders", color=0x3498db)
+    embed = discord.Embed(title="📋 Pending Orders", color=PURPLE)
     for oid, o in list(pending_orders.items())[:10]:
         embed.add_field(
             name=f"`{oid}`",
