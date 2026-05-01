@@ -472,21 +472,20 @@ async def setup_shop(interaction: discord.Interaction):
     if not any(r.id == ADMIN_ROLE_ID for r in interaction.user.roles):
         return await interaction.response.send_message("❌ ไม่มีสิทธิ์", ephemeral=True)
     embed = discord.Embed(
-        title="🏪 INSIDEX SHOP",
+        title="🎨 RESHADE AUTO BUY",
         description=(
-            "**🎨 ReShadeXautO**\n"
-            "Visual Preset Customization — สวยงามระดับโปร\n"
-            "พร้อม preset สำเร็จรูป + คู่มือติดตั้ง\n\n"
+            "**:shopping_cart: บริการจำหน่าย Reshade อัตโนมัติ**\n"
+            "ถ้าต้องการบริการลง Reshade สามารถกด https://discord.com/channels/1400021255528382526/1432715699138072699 มาได้เลยนะครับ\n\n"
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
-            "✅ ยศ **Reshade** ทันที\n"
+            "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
             "🎮 เลือกยศ **Reshade** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
-            "💳 รับชำระ : ธนาคาร / PromptPay / TrueMoney\n"
-            "⚡ ตรวจสลิปอัตโนมัติ — รับยศทันที!"
+            "💳 รับชำระ : ธนาคาร / TrueMoney\n"
+            "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
         color=PURPLE,
     )
-    embed.set_footer(text="INSIDEX | Auto Slip Verification ✨")
+    embed.set_footer(text="INSIDEX | BUY AUTO ✨")
     embed.set_image(url=SHOP_BANNER_URL)
     await interaction.channel.send(embed=embed, view=ShopEmbedView())
     await interaction.response.send_message("✅ วาง shop embed แล้ว", ephemeral=True)
