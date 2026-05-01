@@ -3,7 +3,7 @@ INSIDEX Bot — ReShade Pack Edition
 - ซื้อแล้วได้ยศ Reshade ทันที
 - จากนั้นเลือกยศ down- เสริม 1 ตัว
 - ราคา 39.- รวมทุกอย่าง
-- OCR : ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที (Claude Vision)
+- OCR: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที (Claude Vision)
 - ป้องกันสลิปซ้ำ SHA-256
 - คำสั่งซื้อ: กดปุ่มใน embed เท่านั้น
 """
@@ -38,7 +38,8 @@ BANK_ACC_NO   = os.getenv("BANK_ACCOUNT_NUMBER", "XXX-X-XXXXX-X")
 PROMPTPAY     = os.getenv("PROMPTPAY", "0XX-XXX-XXXX")
 TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 
-PRICE = int(os.getenv("RESHADE_PRICE", "39"))
+PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
+PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 TH    = timezone(timedelta(hours=7))
 
 # ─────────────────────────────────────────
@@ -143,7 +144,7 @@ async def ocr_slip(image_url: str) -> dict:
 
     receiver = res.get("found_receiver") or ""
     if BANK_ACC_NAME.lower() not in receiver.lower():
-        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver or 'ไม่มี'})"}
+        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ : {receiver or 'ไม่มี'})"}
 
     dt_str = res.get("found_datetime")
     if dt_str:
@@ -184,7 +185,7 @@ class DownRoleSelect(discord.ui.Select):
             for r in DOWN_ROLES
         ]
         super().__init__(
-            placeholder="🎮 เลือกยศ down- ที่ต้องการ...",
+            placeholder="🎮 เลือก Reshade ที่ต้องการ...",
             min_values=1,
             max_values=1,
             options=options,
@@ -258,7 +259,7 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
     # Log purchase
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if log_ch:
-        e = discord.Embed(title="💳 Purchase — ReShade Pack", color=0x00b894, timestamp=datetime.now())
+        e = discord.Embed(title="💳 Purchase — ReShade", color=0x00b894, timestamp=datetime.now())
         e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
         e.add_field(name="ยอด",       value=f"฿{ocr['amount']}",                inline=True)
         e.add_field(name="วิธีชำระ", value=method,                              inline=True)
@@ -271,10 +272,10 @@ async def grant_reshade_and_pick(channel, guild, member, order_id, ocr, method):
     await channel.send(
         content=member.mention,
         embed=discord.Embed(
-            title="🎮 เลือกยศ down- เสริม",
+            title="🎮 เลือกยศ Reshade",
             description=(
                 "ยศ **Reshade** ถูกมอบให้แล้ว ✅\n\n"
-                "เลือกยศ **down-** ที่ต้องการ 1 ตัว\n"
+                "เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n"
                 "*(รวมในราคา ฿39 แล้ว ไม่มีค่าใช้จ่ายเพิ่ม)*"
             ),
             color=0x9b59b6,
@@ -294,7 +295,7 @@ class PaymentView(discord.ui.View):
     def _order(self):
         return pending_orders.get(self.order_id)
 
-    @discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="🏦 Bank", style=discord.ButtonStyle.primary)
     async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
         o = self._order()
         if not o:
@@ -304,18 +305,18 @@ class PaymentView(discord.ui.View):
         embed = discord.Embed(
             title="🏦 โอนผ่านธนาคาร / PromptPay",
             description=(
-                f"**สินค้า:** 🎨 ReShade Pack\n"
-                f"**ยอด: ฿{PRICE}**\n\n"
-                f"```\nธนาคาร    : {BANK_NAME}\n"
+                f"**สินค้า :** 🎨 ReShade\n"
+                f"**ยอด : ฿{PRICE}**\n\n"
+                f"```\nธนาคาร : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี  : {BANK_ACC_NO}\n"
-                f"พร้อมเพย์ : {PROMPTPAY}\n```\n"
-                f"🔖 Order ID: `{self.order_id}`\n\n"
+                f"เลขบัญชี : {BANK_ACC_NO}\n"
+                f"🔖 Order ID : `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในข้อความถัดไปได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
             color=0x00b894,
         )
+        embed.set_image(url=PAYMENT_IMAGE_URL)
         await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
 
     @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success)
@@ -328,15 +329,16 @@ class PaymentView(discord.ui.View):
         embed = discord.Embed(
             title="💰 โอนผ่าน TrueMoney Wallet",
             description=(
-                f"**สินค้า:** 🎨 ReShade Pack\n"
-                f"**ยอด: ฿{PRICE}**\n\n"
-                f"```\nเบอร์รับเงิน: {TRUE_NUMBER}\n```\n"
-                f"🔖 Order ID: `{self.order_id}`\n\n"
+                f"**สินค้า :** 🎨 ReShade\n"
+                f"**ยอด : ฿{PRICE}**\n\n"
+                f"```\nเบอร์รับเงิน : {TRUE_NUMBER}\n```\n"
+                f"🔖 Order ID : `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในข้อความถัดไปได้เลย**\n"
                 "ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
             color=0xff6b35,
         )
+        embed.set_image(url=PAYMENT_IMAGE_URL)
         await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
 
 
@@ -378,13 +380,13 @@ async def _start_order(interaction: discord.Interaction):
         "timestamp":      datetime.now(TH).isoformat(),
     }
     embed = discord.Embed(
-        title="🛒 สั่งซื้อ ReShade Pack",
+        title="🛒 สั่งซื้อ ReShade",
         description=(
-            f"**ราคา:** ฿{PRICE}\n"
-            f"**Order ID:** `{order_id}`\n\n"
-            "ซื้อแล้วได้:\n"
+            f"**ราคา :** ฿{PRICE}\n"
+            f"**Order ID :** `{order_id}`\n\n"
+            "ซื้อแล้วได้ :\n"
             "✅ ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **down-** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
+            "🎮 เลือกยศ **Reshade ที่ต้องการ** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
             "เลือกวิธีชำระด้านล่าง"
         ),
         color=0xe056a0,
@@ -437,9 +439,9 @@ async def on_message(message: discord.Message):
                     await checking_msg.edit(embed=discord.Embed(
                         title="✅ สลิปผ่าน! กำลังมอบยศ Reshade...",
                         description=(
-                            f"**ยอด:** ฿{ocr['amount']}\n"
-                            f"**ผู้รับ:** {ocr['receiver']}\n"
-                            f"**เวลาสลิป:** {ocr.get('slip_time') or '-'}"
+                            f"**ยอด :** ฿{ocr['amount']}\n"
+                            f"**ผู้รับ :** {ocr['receiver']}\n"
+                            f"**เวลาสลิป :** {ocr.get('slip_time') or '-'}"
                         ),
                         color=0x00b894,
                     ))
@@ -472,14 +474,14 @@ async def setup_shop(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🏪 INSIDEX SHOP",
         description=(
-            "**🎨 ReShade Pack**\n"
+            "**🎨 ReShadeXautO**\n"
             "Visual Preset Customization — สวยงามระดับโปร\n"
             "พร้อม preset สำเร็จรูป + คู่มือติดตั้ง\n\n"
-            f"**ราคา: ฿{PRICE}**\n\n"
-            "ซื้อแล้วได้:\n"
+            f"**ราคา : ฿{PRICE}**\n\n"
+            "ซื้อแล้วได้ :\n"
             "✅ ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **down-** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
-            "💳 รับชำระ: ธนาคาร / PromptPay / TrueMoney\n"
+            "🎮 เลือกยศ **Reshade** เสริม 1 ตัว (รวมในราคาแล้ว)\n\n"
+            "💳 รับชำระ : ธนาคาร / PromptPay / TrueMoney\n"
             "⚡ ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
         color=0xe056a0,
