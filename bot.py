@@ -362,11 +362,16 @@ async def _start_order(interaction: discord.Interaction):
     existing_thread_id = user_threads.get(member.id)
     if existing_thread_id:
         existing = interaction.guild.get_thread(existing_thread_id)
-        if existing:
+        if existing:  # ← indent ให้อยู่ใต้ if existing_thread_id
             return await interaction.response.send_message(
                 f"❗ คุณมี order ค้างอยู่แล้ว → {existing.mention}",
                 ephemeral=True
             )
+        else:
+            # thread หายไปแล้ว → เคลียร์ทิ้ง
+            user_threads.pop(member.id, None)
+            for oid in [o for o, v in pending_orders.items() if v["user_id"] == member.id]:
+                pending_orders.pop(oid, None)
 
     order_id = str(uuid.uuid4())[:8].upper()
 
