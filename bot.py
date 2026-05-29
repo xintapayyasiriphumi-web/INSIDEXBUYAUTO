@@ -76,6 +76,27 @@ shop_embed_ids: dict  = {}   # channel_id → message_id ของ shop embed
 user_threads: dict    = {}   # user_id → thread_id (กัน spam สร้าง thread ซ้ำ)
 
 
+
+STATE_FILE = "state.json"
+
+def load_state():
+    global pending_orders, used_slip_hashes, user_threads
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            data = json.load(f)
+            pending_orders    = data.get("pending_orders", {})
+            used_slip_hashes  = set(data.get("used_slip_hashes", []))
+            user_threads      = {int(k): v for k, v in data.get("user_threads", {}).items()}
+
+def save_state():
+    with open(STATE_FILE, "w") as f:
+        json.dump({
+            "pending_orders":   pending_orders,
+            "used_slip_hashes": list(used_slip_hashes),
+            "user_threads":     user_threads,
+        }, f)
+
+
 # ─────────────────────────────────────────
 #  OCR (Claude Vision)
 # ─────────────────────────────────────────
@@ -127,7 +148,7 @@ async def ocr_slip(image_url: str) -> dict:
         async with s.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers, json=body,
-            timeout=aiohttp.ClientTimeout(total=30),
+            timeout=aiohttp.ClientTimeout(total=60),
         ) as r:
             if r.status != 200:
                 return {"ok": False, "reason": f"Claude API error {r.status}"}
@@ -210,7 +231,45 @@ class DownRoleSelect(discord.ui.Select):
 
         chosen_labels = ", ".join(f"`{l}`" for l, _ in chosen)
 
-        # Log
+    # ── แมป label → channel ID ──
+        DOWN_ROLE_CHANNELS = {
+            "Moretime":   int(os.getenv("CH_DOWN_MORETIME",   "0")),
+            "Dotashd.v1": int(os.getenv("CH_DOWN_DOTASHD_V1", "0")),
+            "Dotashd.v2": int(os.getenv("CH_DOWN_DOTASHD_V2", "0")),
+            "Dotashd.wf": int(os.getenv("CH_DOWN_DOTASHD_WF", "0")),
+            "Dotashd.v3": int(os.getenv("CH_DOWN_DOTASHD_V3", "0")),
+            "Dotasuns":   int(os.getenv("CH_DOWN_DOTASUNS",   "0")),
+            "Dotashd.bw": int(os.getenv("CH_DOWN_DOTASHD_BW", "0")),
+            "Doinluv.01": int(os.getenv("CH_DOWN_DOINLUV_01", "0")),
+            "Doinluv.02": int(os.getenv("CH_DOWN_DOINLUV_02", "0")),
+            "Doinluv.03": int(os.getenv("CH_DOWN_DOINLUV_03", "0")),
+            "Doinluv.04": int(os.getenv("CH_DOWN_DOINLUV_04", "0")),
+        }
+
+    # ── DM แจ้งห้องของยศที่เลือก ──
+        try:
+            dm_lines = []
+            for label, _ in chosen:
+                ch_id = DOWN_ROLE_CHANNELS.get(label, 0)
+                if ch_id:
+                    dm_lines.append(f"🎮 **{label}** → <#{ch_id}>")
+                else:
+                    dm_lines.append(f"🎮 **{label}** → (ไม่ได้ตั้งค่าห้อง)")
+
+            await interaction.user.send(embed=discord.Embed(
+                title="🎮 ยศ Reshade ของคุณพร้อมแล้ว!",
+                description=(
+                    f"**Order ID:** `{self.order_id}`\n\n"
+                    f"คุณสามารถเข้าห้องด้านล่างได้เลยครับ\n\n"
+                    + "\n".join(dm_lines) +
+                    "\n\nขอบคุณที่ใช้บริการ **INSIDEX** 🙏"
+                ),
+                color=PURPLE,
+            ))
+        except Exception:
+            pass
+
+    # Log
         log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
             await log_ch.send(embed=discord.Embed(
@@ -249,6 +308,7 @@ class DownRoleSelect(discord.ui.Select):
                 pass
         # เคลียร์ user_threads
         user_threads.pop(interaction.user.id, None)
+        save_state()
 
 
 class DownRoleView(discord.ui.View):
@@ -308,7 +368,7 @@ class PaymentView(discord.ui.View):
                 f"```\n"
                 f"เบอร์รับเงิน : {TRUE_NUMBER}\n"
                 f"```\n"
-                f"🔖 **Order ID :** `{{self.order_id}}`\n\n"
+                f"🔖 **Order ID :** `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
                 "> ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
@@ -327,6 +387,7 @@ class CancelView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button):
         order = pending_orders.pop(self.order_id, None)
         user_threads.pop(interaction.user.id, None)
+        save_state()
         await interaction.response.edit_message(
             content="❌ ยกเลิก Order แล้ว ห้องนี้จะถูกลบใน 5 วินาที",
             embed=None, view=None
@@ -399,6 +460,8 @@ async def _start_order(interaction: discord.Interaction):
         "payment_method": None,
         "timestamp":      datetime.now(TH).isoformat(),
     }
+    
+    save_state()
 
     # ส่ง embed ใน thread
     embed = discord.Embed(
@@ -418,7 +481,7 @@ async def _start_order(interaction: discord.Interaction):
 
     # แจ้ง ephemeral ให้ลูกค้าไปที่ thread
     await interaction.response.send_message(
-        f"<a:1134verifiedanimated:1495470992452227103> สร้างห้องส่วนตัวให้แล้ว → {thread.mention}",
+        f"<a:1134verifiedanimated:1495470992452227103> สร้างห้องส่วนตัวให้แล้ว กดที่นี่ → {thread.mention}",
         ephemeral=True
     )
 
@@ -474,13 +537,43 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
     )
 
 
+
+async def cleanup_expired_orders():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.now(TH)
+        expired = [
+            oid for oid, o in pending_orders.items()
+            if (now - datetime.fromisoformat(o["timestamp"])).total_seconds() > 3600
+        ]
+        for oid in expired:
+            o = pending_orders.pop(oid, None)
+            if o:
+                user_threads.pop(o["user_id"], None)
+                guild = bot.get_guild(GUILD_ID)
+                if guild:
+                    thread = guild.get_thread(o["thread_id"])
+                    if thread:
+                        try:
+                            await thread.delete()
+                        except Exception:
+                            pass
+        if expired:       # ✅ เพิ่ม — save เฉพาะตอนมีการลบ
+            save_state()  # ✅ เพิ่ม
+        await asyncio.sleep(300)
+
 # ─────────────────────────────────────────
 #  EVENTS
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
+    load_state()  # ✅ เพิ่ม
     print(f"✅ INSIDEX Bot: {bot.user}")
     bot.add_view(ShopEmbedView())
+    bot.add_view(PaymentView(""))
+    bot.add_view(CancelView(""))
+    bot.add_view(DownRoleView("", 0))
+    bot.loop.create_task(cleanup_expired_orders())
     try:
         synced = await bot.tree.sync()
         print(f"✅ Synced {len(synced)} commands")
@@ -519,6 +612,7 @@ async def on_message(message: discord.Message):
                 if ocr["ok"]:
                     order["status"] = "completed"
                     pending_orders.pop(order_id, None)
+                    save_state()
                     await checking_msg.edit(embed=discord.Embed(
                         title="<a:1134verifiedanimated:1495470992452227103> สลิปผ่าน! กำลังมอบยศ...",
                         description=(
@@ -617,6 +711,8 @@ async def orders_cmd(interaction: discord.Interaction):
             inline=False,
         )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 
 
 # ─────────────────────────────────────────
