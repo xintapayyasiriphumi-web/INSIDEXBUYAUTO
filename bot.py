@@ -168,8 +168,10 @@ async def ocr_slip(image_url: str) -> dict:
     if int(amt) != PRICE:
         return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt} ต้อง ฿{PRICE})"}
 
+    ACCEPTED_RECEIVERS = ["SIRIPHOOM INTAPANYA","SIRIPOOM INTAPANYA", "สิริภูมิ อินตะปัญญา"]
+
     receiver = res.get("found_receiver") or ""
-    if BANK_ACC_NAME.lower() not in receiver.lower():
+    if not any(name.lower() in receiver.lower() for name in ACCEPTED_RECEIVERS):
         return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver or 'ไม่มี'})"}
 
     dt_str = res.get("found_datetime")
