@@ -1,11 +1,9 @@
 """
 INSIDEX Bot — ReShade Edition
-- ซื้อแล้วได้ยศ Reshade ทันที
-- จากนั้นเลือกยศ down- เสริม 1 ตัว
-- ราคา 39.- รวมทุกอย่าง
+- เลือก Reshade ได้หลายตัว ราคาตัวละ ฿39
 - EasySlip API v1: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที
 - ป้องกันสลิปซ้ำ SHA-256
-- Private Thread ต่อ 1 ลูกค้า — ไม่เห็นแชทของคนอื่น
+- Private Thread ต่อ 1 ลูกค้า
 """
 
 import discord
@@ -36,19 +34,14 @@ BANK_ACC_NAME = os.getenv("BANK_ACCOUNT_NAME", "INSIDEX SHOP")
 BANK_ACC_NO   = os.getenv("BANK_ACCOUNT_NUMBER", "XXX-X-XXXXX-X")
 TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 
-PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
+PRICE_PER_ITEM    = int(os.getenv("RESHADE_PRICE", "39"))  # ราคาต่อตัว
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 SHOP_BANNER_URL   = "https://cdn.discordapp.com/attachments/1446487555091730544/1499837254078697643/21.png?ex=69f63fcb&is=69f4ee4b&hm=03af46f901158128aa3e5758cca55bdd53059f754d9b5b834b2ba77f3503830f&"
 TH     = timezone(timedelta(hours=7))
 PURPLE = 0x7b2cbf
 
-# partial match — จับได้แม้ชื่อถูกตัดหรือมีคำนำหน้า
 ACCEPTED_RECEIVERS = [
-    "SIRIPOOM",
-    "SIRIPHOOM",
-    "สิริภูมิ",
-    "INTAPANYA",
-    "อินตะปัญญา",
+    "SIRIPOOM", "SIRIPHOOM", "สิริภูมิ", "INTAPANYA", "อินตะปัญญา",
 ]
 
 # ─────────────────────────────────────────
@@ -69,6 +62,20 @@ DOWN_ROLES = [
     {"label": "Doinluv.03", "env": "ROLE_DOWN_DOINLUV_03"},
     {"label": "Doinluv.04", "env": "ROLE_DOWN_DOINLUV_04"},
 ]
+
+DOWN_ROLE_CHANNELS = {
+    "Moretime":   "CH_DOWN_MORETIME",
+    "Dotashd.v1": "CH_DOWN_DOTASHD_V1",
+    "Dotashd.v2": "CH_DOWN_DOTASHD_V2",
+    "Dotashd.wf": "CH_DOWN_DOTASHD_WF",
+    "Dotashd.v3": "CH_DOWN_DOTASHD_V3",
+    "Dotasuns":   "CH_DOWN_DOTASUNS",
+    "Dotashd.bw": "CH_DOWN_DOTASHD_BW",
+    "Doinluv.01": "CH_DOWN_DOINLUV_01",
+    "Doinluv.02": "CH_DOWN_DOINLUV_02",
+    "Doinluv.03": "CH_DOWN_DOINLUV_03",
+    "Doinluv.04": "CH_DOWN_DOINLUV_04",
+}
 
 def get_down_role_id(env_key: str) -> int:
     return int(os.getenv(env_key, "0"))
@@ -104,18 +111,12 @@ def save_state():
 # ─────────────────────────────────────────
 #  EASYSLIP v1 VERIFY
 # ─────────────────────────────────────────
-def _check_receiver(payload: dict) -> tuple[bool, str]:
-    """
-    v1 structure: receiver.account.name.th / .en
-    เช็คแยก th และ en ไม่รวม string เพื่อกันชื่อถูกตัด
-    คืน (passed, receiver_display)
-    """
+def _check_receiver(payload: dict) -> tuple:
     rec      = payload.get("receiver", {})
     acc_name = rec.get("account", {}).get("name", {})
     th = (acc_name.get("th") or "").strip()
     en = (acc_name.get("en") or "").strip()
     display = f"{th} {en}".strip() or "ไม่มี"
-
     passed = any(
         kw.lower() in th.lower() or kw.lower() in en.lower()
         for kw in ACCEPTED_RECEIVERS
@@ -123,8 +124,7 @@ def _check_receiver(payload: dict) -> tuple[bool, str]:
     return passed, display
 
 
-async def ocr_slip(image_url: str) -> dict:
-    # ดาวน์โหลดรูป
+async def ocr_slip(image_url: str, expected_amount: int) -> dict:
     async with aiohttp.ClientSession() as s:
         async with s.get(image_url) as r:
             if r.status != 200:
@@ -132,14 +132,12 @@ async def ocr_slip(image_url: str) -> dict:
             img_bytes    = await r.read()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0]
 
-    # เช็คสลิปซ้ำ
     slip_hash = hashlib.sha256(img_bytes).hexdigest()
     if slip_hash in used_slip_hashes:
         return {"ok": False, "reason": "❌ สลิปนี้ถูกใช้ไปแล้ว"}
 
     now_th = datetime.now(TH)
 
-    # ส่ง EasySlip API v1
     form = aiohttp.FormData()
     form.add_field("file", img_bytes, filename="slip.jpg", content_type=content_type)
 
@@ -160,12 +158,12 @@ async def ocr_slip(image_url: str) -> dict:
 
     payload = data.get("data", {})
 
-    # เช็คยอด
+    # เช็คยอด — ใช้ expected_amount ของ order นั้นๆ
     amt = float(payload.get("amount", {}).get("amount", 0))
-    if round(amt) != PRICE:
-        return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt:.0f} ต้อง ฿{PRICE})"}
+    if round(amt) != expected_amount:
+        return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt:.0f} ต้อง ฿{expected_amount})"}
 
-    # เช็คผู้รับ — เช็คแยก th/en
+    # เช็คผู้รับ
     passed, receiver_display = _check_receiver(payload)
     if not passed:
         return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver_display})"}
@@ -186,7 +184,6 @@ async def ocr_slip(image_url: str) -> dict:
         "amount":    amt,
         "receiver":  receiver_display,
         "slip_time": dt_str,
-        "slip_type": "bank",
     }
 
 
@@ -200,117 +197,61 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 # ─────────────────────────────────────────
-#  VIEW: เลือกยศ down-
+#  STEP 1: เลือก Reshade ก่อนชำระ
 # ─────────────────────────────────────────
-class DownRoleSelect(discord.ui.Select):
-    def __init__(self, order_id: str, thread_id: int):
-        self.order_id  = order_id
-        self.thread_id = thread_id
+class SelectReshadeView(discord.ui.View):
+    def __init__(self, order_id: str):
+        super().__init__(timeout=300)
+        self.add_item(ReshadeSelectMenu(order_id))
+
+
+class ReshadeSelectMenu(discord.ui.Select):
+    def __init__(self, order_id: str):
+        self.order_id = order_id
         options = [
             discord.SelectOption(label=r["label"], value=r["env"])
             for r in DOWN_ROLES
         ]
         super().__init__(
-            placeholder="🎮 เลือก Reshade ที่ต้องการ...",
+            placeholder="🎮 เลือก Reshade ที่ต้องการ (เลือกได้หลายตัว)...",
             min_values=1,
-            max_values=1,
+            max_values=len(DOWN_ROLES),
             options=options,
-            custom_id="select_down_role",
+            custom_id="select_reshade_prebuy",
         )
 
     async def callback(self, interaction: discord.Interaction):
-        chosen = [(r["label"], r["env"]) for r in DOWN_ROLES if r["env"] in self.values]
-        roles_to_add = []
-        for label, env in chosen:
-            role = interaction.guild.get_role(get_down_role_id(env))
-            if role:
-                roles_to_add.append(role)
+        order = pending_orders.get(self.order_id)
+        if not order:
+            return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
 
-        if roles_to_add:
-            await interaction.user.add_roles(*roles_to_add, reason=f"INSIDEX {self.order_id}")
+        chosen_envs   = self.values
+        chosen_labels = [r["label"] for r in DOWN_ROLES if r["env"] in chosen_envs]
+        qty           = len(chosen_labels)
+        total         = qty * PRICE_PER_ITEM
 
-        chosen_labels = ", ".join(f"`{l}`" for l, _ in chosen)
-
-        DOWN_ROLE_CHANNELS = {
-            "Moretime":   int(os.getenv("CH_DOWN_MORETIME",   "0")),
-            "Dotashd.v1": int(os.getenv("CH_DOWN_DOTASHD_V1", "0")),
-            "Dotashd.v2": int(os.getenv("CH_DOWN_DOTASHD_V2", "0")),
-            "Dotashd.wf": int(os.getenv("CH_DOWN_DOTASHD_WF", "0")),
-            "Dotashd.v3": int(os.getenv("CH_DOWN_DOTASHD_V3", "0")),
-            "Dotasuns":   int(os.getenv("CH_DOWN_DOTASUNS",   "0")),
-            "Dotashd.bw": int(os.getenv("CH_DOWN_DOTASHD_BW", "0")),
-            "Doinluv.01": int(os.getenv("CH_DOWN_DOINLUV_01", "0")),
-            "Doinluv.02": int(os.getenv("CH_DOWN_DOINLUV_02", "0")),
-            "Doinluv.03": int(os.getenv("CH_DOWN_DOINLUV_03", "0")),
-            "Doinluv.04": int(os.getenv("CH_DOWN_DOINLUV_04", "0")),
-        }
-
-        try:
-            dm_lines = []
-            for label, _ in chosen:
-                ch_id = DOWN_ROLE_CHANNELS.get(label, 0)
-                if ch_id:
-                    dm_lines.append(f"🎮 **{label}** → <#{ch_id}>")
-                else:
-                    dm_lines.append(f"🎮 **{label}** → (ไม่ได้ตั้งค่าห้อง)")
-
-            await interaction.user.send(embed=discord.Embed(
-                title="🎮 ยศ Reshade ของคุณพร้อมแล้ว!",
-                description=(
-                    f"**Order ID:** `{self.order_id}`\n\n"
-                    f"คุณสามารถเข้าห้องด้านล่างได้เลยครับ\n\n"
-                    + "\n".join(dm_lines) +
-                    "\n\nขอบคุณที่ใช้บริการ **INSIDEX** 🙏"
-                ),
-                color=PURPLE,
-            ))
-        except Exception:
-            pass
-
-        log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
-        if log_ch:
-            await log_ch.send(embed=discord.Embed(
-                title="🎮 Down Role Selected",
-                description=(
-                    f"**User:** {interaction.user.mention} ({interaction.user.name})\n"
-                    f"**Order ID:** `{self.order_id}`\n"
-                    f"**ยศที่เลือก:** {chosen_labels}"
-                ),
-                color=PURPLE,
-                timestamp=datetime.now(),
-            ))
-
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="<a:1134verifiedanimated:1495470992452227103> เสร็จสมบูรณ์!",
-                description=(
-                    f"**ได้รับยศแล้ว :**\n"
-                    f"🎨 **Reshade** + {chosen_labels}\n\n"
-                    "━━━━━━━━━━━━━━━━\n"
-                    "ขอบคุณที่ใช้บริการ **INSIDEX** 🙏\n"
-                    "> ห้องนี้จะถูกลบใน 5 วินาที"
-                ),
-                color=PURPLE,
-            ),
-            view=None,
-        )
-
-        await asyncio.sleep(5)
-        thread = interaction.guild.get_thread(self.thread_id)
-        if thread:
-            try:
-                await thread.delete()
-            except Exception:
-                pass
-
-        user_threads.pop(interaction.user.id, None)
+        # บันทึกลง order
+        order["chosen_envs"]   = list(chosen_envs)
+        order["chosen_labels"] = chosen_labels
+        order["total_price"]   = total
+        order["status"]        = "pending_payment"
         save_state()
 
-
-class DownRoleView(discord.ui.View):
-    def __init__(self, order_id: str, thread_id: int):
-        super().__init__(timeout=None)
-        self.add_item(DownRoleSelect(order_id, thread_id))
+        # แสดงสรุปและให้เลือกวิธีชำระ
+        items_text = "\n".join(f"  🎨 {l}" for l in chosen_labels)
+        embed = discord.Embed(
+            title="🛒 สรุปรายการ",
+            description=(
+                f"**Reshade ที่เลือก ({qty} ตัว) :**\n{items_text}\n\n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"💰 **ยอดรวม : ฿{total}**\n"
+                f"*(ตัวละ ฿{PRICE_PER_ITEM})*\n\n"
+                f"🔖 Order ID : `{self.order_id}`\n\n"
+                "เลือกวิธีชำระด้านล่าง"
+            ),
+            color=PURPLE,
+        )
+        await interaction.response.edit_message(embed=embed, view=PaymentView(self.order_id))
 
 
 # ─────────────────────────────────────────
@@ -331,11 +272,12 @@ class PaymentView(discord.ui.View):
             return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
         o["payment_method"] = "bank"
         o["status"]         = "waiting_slip"
+        total = o["total_price"]
         embed = discord.Embed(
             title="🏦 โอนผ่านธนาคาร / PromptPay",
             description=(
-                f"**สินค้า :** 🎨 ReShade\n"
-                f"**ยอด : ฿{PRICE}**\n\n"
+                f"**สินค้า :** 🎨 ReShade x{len(o['chosen_labels'])} ตัว\n"
+                f"**ยอดรวม : ฿{total}**\n\n"
                 f"```\nธนาคาร : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
                 f"เลขบัญชี : {BANK_ACC_NO}\n```\n"
@@ -355,12 +297,13 @@ class PaymentView(discord.ui.View):
             return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
         o["payment_method"] = "truemoney"
         o["status"]         = "waiting_slip"
+        total = o["total_price"]
         embed = discord.Embed(
             title="💰 โอนผ่าน TrueMoney Wallet",
             description=(
-                f"🎨 **ReShade Pack**\n"
+                f"🎨 **ReShade x{len(o['chosen_labels'])} ตัว**\n"
                 f"━━━━━━━━━━━━━━━━\n"
-                f"💰 **ยอดชำระ : ฿{PRICE}**\n\n"
+                f"💰 **ยอดชำระ : ฿{total}**\n\n"
                 f"```\nเบอร์รับเงิน : {TRUE_NUMBER}\n```\n"
                 f"🔖 **Order ID :** `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
@@ -398,7 +341,7 @@ class ShopEmbedView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🎨 ซื้อ ReShade — ฿39",
+        label="🎨 ซื้อ ReShade",
         style=discord.ButtonStyle.primary,
         custom_id="insidex_buy_reshade",
     )
@@ -446,8 +389,11 @@ async def _start_order(interaction: discord.Interaction):
         "user_id":        member.id,
         "user_name":      member.name,
         "thread_id":      thread.id,
-        "status":         "pending_payment",
+        "status":         "selecting",
         "payment_method": None,
+        "chosen_envs":    [],
+        "chosen_labels":  [],
+        "total_price":    0,
         "timestamp":      datetime.now(TH).isoformat(),
     }
     save_state()
@@ -456,16 +402,14 @@ async def _start_order(interaction: discord.Interaction):
         title="🛒 สั่งซื้อ ReShade",
         description=(
             f"สวัสดี {member.mention}!\n\n"
-            f"**ราคา :** ฿{PRICE}\n"
-            f"**Order ID :** `{order_id}`\n\n"
-            "ของที่จะได้รับ :\n"
-            "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade** ได้ 1 ตัว\n\n"
-            "เลือกวิธีชำระด้านล่าง"
+            f"💰 **ราคาตัวละ ฿{PRICE_PER_ITEM}** (เลือกได้หลายตัว)\n\n"
+            f"🔖 Order ID : `{order_id}`\n\n"
+            "**เลือก Reshade ที่ต้องการด้านล่าง**\n"
+            "*(เลือกได้หลายตัวพร้อมกัน)*"
         ),
         color=PURPLE,
     )
-    await thread.send(embed=embed, view=PaymentView(order_id))
+    await thread.send(embed=embed, view=SelectReshadeView(order_id))
     await interaction.response.send_message(
         f"<a:1134verifiedanimated:1495470992452227103> สร้างห้องส่วนตัวให้แล้ว กดที่นี่ → {thread.mention}",
         ephemeral=True
@@ -475,49 +419,85 @@ async def _start_order(interaction: discord.Interaction):
 # ─────────────────────────────────────────
 #  GRANT
 # ─────────────────────────────────────────
-async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
+async def grant_reshade_and_finish(thread, guild, member, order_id, ocr, method, chosen_labels, chosen_envs):
+    # มอบยศ Reshade หลัก
     reshade_role = guild.get_role(ROLE_RESHADE_ID)
     if reshade_role:
         await member.add_roles(reshade_role, reason=f"INSIDEX {order_id}")
 
+    # มอบยศ down ทุกตัวที่เลือก
+    roles_added = []
+    for env in chosen_envs:
+        role = guild.get_role(get_down_role_id(env))
+        if role:
+            roles_added.append(role)
+    if roles_added:
+        await member.add_roles(*roles_added, reason=f"INSIDEX {order_id}")
+
+    chosen_labels_text = "\n".join(f"🎨 **{l}**" for l in chosen_labels)
+
+    # DM แจ้งยศ + ห้อง
     try:
+        dm_lines = []
+        for label in chosen_labels:
+            env_key = next((r["env"] for r in DOWN_ROLES if r["label"] == label), None)
+            ch_env  = DOWN_ROLE_CHANNELS.get(label)
+            ch_id   = int(os.getenv(ch_env, "0")) if ch_env else 0
+            if ch_id:
+                dm_lines.append(f"🎮 **{label}** → <#{ch_id}>")
+            else:
+                dm_lines.append(f"🎮 **{label}** → (ไม่ได้ตั้งค่าห้อง)")
+
         await member.send(embed=discord.Embed(
             title="<a:1134verifiedanimated:1495470992452227103> ได้รับยศ Reshade แล้ว!",
             description=(
                 f"**Order ID:** `{order_id}`\n\n"
-                "<a:1134verifiedanimated:1495470992452227103> ยศ **Reshade** ถูกมอบให้แล้ว!\n\n"
-                "> กลับไปที่ห้องส่วนตัวแล้วเลือกยศ **Reshade ที่ต้องการได้เลย**"
+                f"ยศที่ได้รับ:\n{chosen_labels_text}\n\n"
+                "เข้าห้องได้เลยครับ:\n"
+                + "\n".join(dm_lines) +
+                "\n\nขอบคุณที่ใช้บริการ **INSIDEX** 🙏"
             ),
             color=PURPLE,
         ))
     except Exception:
         pass
 
+    # Log
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if log_ch:
         e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
-        e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
-        e.add_field(name="ยอด",       value=f"฿{ocr['amount']:.0f}",            inline=True)
-        e.add_field(name="วิธีชำระ", value=method,                              inline=True)
-        e.add_field(name="Order ID",  value=f"`{order_id}`",                    inline=True)
-        e.add_field(name="ผู้รับ",    value=ocr["receiver"] or "-",             inline=True)
-        e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
+        e.add_field(name="User",        value=f"{member.mention} ({member.name})", inline=True)
+        e.add_field(name="ยอด",         value=f"฿{ocr['amount']:.0f}",            inline=True)
+        e.add_field(name="วิธีชำระ",   value=method,                              inline=True)
+        e.add_field(name="Order ID",    value=f"`{order_id}`",                    inline=True)
+        e.add_field(name="ผู้รับ",      value=ocr["receiver"] or "-",             inline=True)
+        e.add_field(name="เวลาสลิป",   value=ocr.get("slip_time") or "-",        inline=True)
+        e.add_field(name="Reshade",     value=", ".join(chosen_labels),           inline=False)
         await log_ch.send(embed=e)
 
+    # แจ้งใน thread แล้วลบ
     await thread.send(
         content=member.mention,
         embed=discord.Embed(
-            title="🎮 เลือกยศ Reshade",
+            title="<a:1134verifiedanimated:1495470992452227103> เสร็จสมบูรณ์!",
             description=(
-                "ยศ **Reshade** ถูกมอบให้แล้ว <a:1134verifiedanimated:1495470992452227103>\n\n"
-                "เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n"
-                "*(รวมในราคา ฿39 แล้ว)*\n\n"
-                "⚠️ หลังเลือกแล้ว ห้องนี้จะถูกลบอัตโนมัติใน 5 วินาที"
+                f"**ได้รับยศแล้ว :**\n{chosen_labels_text}\n\n"
+                "━━━━━━━━━━━━━━━━\n"
+                "ขอบคุณที่ใช้บริการ **INSIDEX** 🙏\n"
+                "> ห้องนี้จะถูกลบใน 5 วินาที"
             ),
             color=PURPLE,
         ),
-        view=DownRoleView(order_id, thread.id),
     )
+
+    await asyncio.sleep(5)
+    try:
+        await thread.delete()
+    except Exception:
+        pass
+
+    user_threads.pop(member.id, None)
+    save_state()
 
 
 # ─────────────────────────────────────────
@@ -558,7 +538,6 @@ async def on_ready():
     bot.add_view(ShopEmbedView())
     bot.add_view(PaymentView(""))
     bot.add_view(CancelView(""))
-    bot.add_view(DownRoleView("", 0))
     asyncio.ensure_future(cleanup_expired_orders())
     try:
         synced = await bot.tree.sync()
@@ -592,12 +571,16 @@ async def on_message(message: discord.Message):
                     color=PURPLE,
                 ))
 
-                ocr = await ocr_slip(att.url)
+                ocr = await ocr_slip(att.url, order["total_price"])
 
                 if ocr["ok"]:
                     order["status"] = "completed"
+                    chosen_labels = order["chosen_labels"]
+                    chosen_envs   = order["chosen_envs"]
+                    method        = order["payment_method"]
                     pending_orders.pop(order_id, None)
                     save_state()
+
                     await checking_msg.edit(embed=discord.Embed(
                         title="<a:1134verifiedanimated:1495470992452227103> สลิปผ่าน! กำลังมอบยศ...",
                         description=(
@@ -607,13 +590,15 @@ async def on_message(message: discord.Message):
                         ),
                         color=PURPLE,
                     ))
-                    await grant_reshade_and_pick(
+                    await grant_reshade_and_finish(
                         thread=message.channel,
                         guild=message.guild,
                         member=message.author,
                         order_id=order_id,
                         ocr=ocr,
-                        method=order["payment_method"],
+                        method=method,
+                        chosen_labels=chosen_labels,
+                        chosen_envs=chosen_envs,
                     )
                 else:
                     order["status"] = "waiting_slip"
@@ -638,10 +623,10 @@ async def setup_shop(interaction: discord.Interaction):
         description=(
             "**:shopping_cart: บริการจำหน่าย Reshade อัตโนมัติ**\n"
             "ถ้าต้องการบริการลง Reshade สามารถกด https://discord.com/channels/1400021255528382526/1432715699138072699 มาได้เลยนะครับ ค่าบริการ **15.-**\n\n"
-            f"**ราคา : ฿{PRICE}**\n\n"
+            f"**ราคา : ฿{PRICE_PER_ITEM} / ตัว**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
-            "🎮 เลือกยศ **Reshade** ที่ต้องการ 1 ตัว\n\n"
+            "🎮 เลือกยศ **Reshade** ได้หลายตัวพร้อมกัน\n\n"
             "💳 รับชำระ : ธนาคาร / TrueMoney\n"
             "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
@@ -693,7 +678,11 @@ async def orders_cmd(interaction: discord.Interaction):
     for oid, o in list(pending_orders.items())[:10]:
         embed.add_field(
             name=f"`{oid}`",
-            value=f"<@{o['user_id']}> | {o['status']} | {o.get('payment_method') or 'ยังไม่เลือก'}",
+            value=(
+                f"<@{o['user_id']}> | {o['status']} | "
+                f"฿{o.get('total_price', 0)} | "
+                f"{', '.join(o.get('chosen_labels', [])) or 'ยังไม่เลือก'}"
+            ),
             inline=False,
         )
     await interaction.response.send_message(embed=embed, ephemeral=True)
