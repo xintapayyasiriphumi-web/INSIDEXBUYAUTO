@@ -2,6 +2,7 @@
 INSIDEX Bot — ReShade Edition
 - เลือก Reshade ได้หลายตัว ราคาตัวละ ฿39
 - EasySlip API v1: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที
+- QR PromptPay ล็อกยอดอัตโนมัติตาม order (เฉพาะ Bank)
 - ป้องกันสลิปซ้ำ SHA-256
 - Private Thread ต่อ 1 ลูกค้า
 """
@@ -11,6 +12,7 @@ from discord.ext import commands
 from discord import app_commands
 import aiohttp
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -33,8 +35,9 @@ BANK_NAME     = os.getenv("BANK_NAME", "กสิกรไทย (KBank)")
 BANK_ACC_NAME = os.getenv("BANK_ACCOUNT_NAME", "INSIDEX SHOP")
 BANK_ACC_NO   = os.getenv("BANK_ACCOUNT_NUMBER", "XXX-X-XXXXX-X")
 TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
+PROMPTPAY_NO  = "0822099267"  # เบอร์สร้าง QR PromptPay
 
-PRICE_PER_ITEM    = int(os.getenv("RESHADE_PRICE", "39"))  # ราคาต่อตัว
+PRICE_PER_ITEM    = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 SHOP_BANNER_URL   = "https://cdn.discordapp.com/attachments/1446487555091730544/1499837254078697643/21.png?ex=69f63fcb&is=69f4ee4b&hm=03af46f901158128aa3e5758cca55bdd53059f754d9b5b834b2ba77f3503830f&"
 TH     = timezone(timedelta(hours=7))
@@ -109,7 +112,37 @@ def save_state():
 
 
 # ─────────────────────────────────────────
-#  EASYSLIP v1 VERIFY
+#  EASYSLIP: สร้าง QR PromptPay
+# ─────────────────────────────────────────
+async def generate_promptpay_qr(amount: int) -> bytes | None:
+    """คืน PNG bytes ของ QR หรือ None ถ้า error"""
+    async with aiohttp.ClientSession() as s:
+        async with s.post(
+            "https://api.easyslip.com/v1/qr/generate",
+            headers={
+                "Authorization": f"Bearer {EASYSLIP_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "type":   "PROMPTPAY",
+                "msisdn": PROMPTPAY_NO,
+                "amount": float(amount),
+            },
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as r:
+            if r.status != 200:
+                return None
+            data = await r.json()
+
+    if data.get("status") != 200:
+        return None
+
+    img_b64 = data["data"]["image"]
+    return base64.b64decode(img_b64)
+
+
+# ─────────────────────────────────────────
+#  EASYSLIP: ตรวจสลิป
 # ─────────────────────────────────────────
 def _check_receiver(payload: dict) -> tuple:
     rec      = payload.get("receiver", {})
@@ -158,17 +191,14 @@ async def ocr_slip(image_url: str, expected_amount: int) -> dict:
 
     payload = data.get("data", {})
 
-    # เช็คยอด — ใช้ expected_amount ของ order นั้นๆ
     amt = float(payload.get("amount", {}).get("amount", 0))
     if round(amt) != expected_amount:
         return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt:.0f} ต้อง ฿{expected_amount})"}
 
-    # เช็คผู้รับ
     passed, receiver_display = _check_receiver(payload)
     if not passed:
         return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver_display})"}
 
-    # เช็คเวลา
     dt_str = payload.get("date", "")
     if dt_str:
         try:
@@ -230,14 +260,12 @@ class ReshadeSelectMenu(discord.ui.Select):
         qty           = len(chosen_labels)
         total         = qty * PRICE_PER_ITEM
 
-        # บันทึกลง order
         order["chosen_envs"]   = list(chosen_envs)
         order["chosen_labels"] = chosen_labels
         order["total_price"]   = total
         order["status"]        = "pending_payment"
         save_state()
 
-        # แสดงสรุปและให้เลือกวิธีชำระ
         items_text = "\n".join(f"  🎨 {l}" for l in chosen_labels)
         embed = discord.Embed(
             title="🛒 สรุปรายการ",
@@ -265,7 +293,7 @@ class PaymentView(discord.ui.View):
     def _order(self):
         return pending_orders.get(self.order_id)
 
-    @discord.ui.button(label="🏦 Bank", style=discord.ButtonStyle.primary, custom_id="payment_bank")
+    @discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary, custom_id="payment_bank")
     async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
         o = self._order()
         if not o:
@@ -273,22 +301,50 @@ class PaymentView(discord.ui.View):
         o["payment_method"] = "bank"
         o["status"]         = "waiting_slip"
         total = o["total_price"]
+
+        # defer ก่อนเพราะ generate QR อาจใช้เวลา
+        await interaction.response.defer()
+
+        # สร้าง QR PromptPay ล็อกยอด
+        qr_bytes = await generate_promptpay_qr(total)
+
         embed = discord.Embed(
             title="🏦 โอนผ่านธนาคาร / PromptPay",
             description=(
                 f"**สินค้า :** 🎨 ReShade x{len(o['chosen_labels'])} ตัว\n"
                 f"**ยอดรวม : ฿{total}**\n\n"
-                f"```\nธนาคาร : {BANK_NAME}\n"
+                f"```\nธนาคาร    : {BANK_NAME}\n"
                 f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี : {BANK_ACC_NO}\n```\n"
+                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
                 f"🔖 Order ID : `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
-                "ระบบตรวจอัตโนมัติ ~10 วินาที"
+                "> ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
             color=PURPLE,
         )
-        embed.set_image(url=PAYMENT_IMAGE_URL)
-        await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
+
+        if qr_bytes:
+            # แนบ QR เป็น file
+            qr_file = discord.File(
+                fp=__import__("io").BytesIO(qr_bytes),
+                filename="promptpay_qr.png",
+            )
+            embed.set_image(url="attachment://promptpay_qr.png")
+            embed.set_footer(text=f"QR PromptPay ล็อกยอด ฿{total} | สแกนแล้วโอนได้เลย")
+            await interaction.followup.edit_message(
+                message_id=interaction.message.id,
+                embed=embed,
+                attachments=[qr_file],
+                view=CancelView(self.order_id),
+            )
+        else:
+            # QR generate ล้มเหลว → fallback แสดงรูป payment ปกติ
+            embed.set_image(url=PAYMENT_IMAGE_URL)
+            await interaction.followup.edit_message(
+                message_id=interaction.message.id,
+                embed=embed,
+                view=CancelView(self.order_id),
+            )
 
     @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success, custom_id="payment_truemoney")
     async def truemoney(self, interaction: discord.Interaction, _: discord.ui.Button):
@@ -420,12 +476,10 @@ async def _start_order(interaction: discord.Interaction):
 #  GRANT
 # ─────────────────────────────────────────
 async def grant_reshade_and_finish(thread, guild, member, order_id, ocr, method, chosen_labels, chosen_envs):
-    # มอบยศ Reshade หลัก
     reshade_role = guild.get_role(ROLE_RESHADE_ID)
     if reshade_role:
         await member.add_roles(reshade_role, reason=f"INSIDEX {order_id}")
 
-    # มอบยศ down ทุกตัวที่เลือก
     roles_added = []
     for env in chosen_envs:
         role = guild.get_role(get_down_role_id(env))
@@ -436,13 +490,11 @@ async def grant_reshade_and_finish(thread, guild, member, order_id, ocr, method,
 
     chosen_labels_text = "\n".join(f"🎨 **{l}**" for l in chosen_labels)
 
-    # DM แจ้งยศ + ห้อง
     try:
         dm_lines = []
         for label in chosen_labels:
-            env_key = next((r["env"] for r in DOWN_ROLES if r["label"] == label), None)
-            ch_env  = DOWN_ROLE_CHANNELS.get(label)
-            ch_id   = int(os.getenv(ch_env, "0")) if ch_env else 0
+            ch_env = DOWN_ROLE_CHANNELS.get(label)
+            ch_id  = int(os.getenv(ch_env, "0")) if ch_env else 0
             if ch_id:
                 dm_lines.append(f"🎮 **{label}** → <#{ch_id}>")
             else:
@@ -462,20 +514,18 @@ async def grant_reshade_and_finish(thread, guild, member, order_id, ocr, method,
     except Exception:
         pass
 
-    # Log
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if log_ch:
         e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
-        e.add_field(name="User",        value=f"{member.mention} ({member.name})", inline=True)
-        e.add_field(name="ยอด",         value=f"฿{ocr['amount']:.0f}",            inline=True)
-        e.add_field(name="วิธีชำระ",   value=method,                              inline=True)
-        e.add_field(name="Order ID",    value=f"`{order_id}`",                    inline=True)
-        e.add_field(name="ผู้รับ",      value=ocr["receiver"] or "-",             inline=True)
-        e.add_field(name="เวลาสลิป",   value=ocr.get("slip_time") or "-",        inline=True)
-        e.add_field(name="Reshade",     value=", ".join(chosen_labels),           inline=False)
+        e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
+        e.add_field(name="ยอด",       value=f"฿{ocr['amount']:.0f}",            inline=True)
+        e.add_field(name="วิธีชำระ", value=method,                              inline=True)
+        e.add_field(name="Order ID",  value=f"`{order_id}`",                    inline=True)
+        e.add_field(name="ผู้รับ",    value=ocr["receiver"] or "-",             inline=True)
+        e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
+        e.add_field(name="Reshade",   value=", ".join(chosen_labels),           inline=False)
         await log_ch.send(embed=e)
 
-    # แจ้งใน thread แล้วลบ
     await thread.send(
         content=member.mention,
         embed=discord.Embed(
@@ -627,7 +677,7 @@ async def setup_shop(interaction: discord.Interaction):
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
             "🎮 เลือกยศ **Reshade** ได้หลายตัวพร้อมกัน\n\n"
-            "💳 รับชำระ : ธนาคาร / TrueMoney\n"
+            "💳 รับชำระ : ธนาคาร / PromptPay / TrueMoney\n"
             "<a:2902originallyknownas:1495471157862989964> ตรวจสลิปอัตโนมัติ — รับยศทันที!"
         ),
         color=PURPLE,
