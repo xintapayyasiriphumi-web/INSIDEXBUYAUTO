@@ -97,6 +97,37 @@ def save_state():
 # ─────────────────────────────────────────
 #  EASYSLIP VERIFY
 # ─────────────────────────────────────────
+def _extract_receiver(payload: dict) -> str:
+    """
+    รองรับ 3 รูปแบบ:
+    1. Bank slip  → receiver.bank.account.name.th / .en
+    2. TrueMoney  → receiver.name (string ตรงๆ)
+    3. PromptPay  → receiver.account.name.th / .en
+    """
+    rec = payload.get("receiver", {})
+
+    # รูปแบบ 1: bank
+    bank_name = rec.get("bank", {}).get("account", {}).get("name", {})
+    if isinstance(bank_name, dict) and (bank_name.get("th") or bank_name.get("en")):
+        th = bank_name.get("th", "") or ""
+        en = bank_name.get("en", "") or ""
+        return f"{th} {en}".strip()
+
+    # รูปแบบ 2: truemoney (receiver.name เป็น string)
+    name_str = rec.get("name")
+    if isinstance(name_str, str) and name_str:
+        return name_str.strip()
+
+    # รูปแบบ 3: promptpay / account.name
+    acc_name = rec.get("account", {}).get("name", {})
+    if isinstance(acc_name, dict):
+        th = acc_name.get("th", "") or ""
+        en = acc_name.get("en", "") or ""
+        return f"{th} {en}".strip()
+
+    return ""
+
+
 async def ocr_slip(image_url: str) -> dict:
     # ดาวน์โหลดรูป
     async with aiohttp.ClientSession() as s:
@@ -135,19 +166,18 @@ async def ocr_slip(image_url: str) -> dict:
     payload = data.get("data", {})
 
     # เช็คยอด
-    amt = float(payload.get("amount", {}).get("amount", 0))
+    amount_obj = payload.get("amount", {})
+    # bank slip → amount.amount | truemoney → amount (ตัวเลขตรง)
+    if isinstance(amount_obj, dict):
+        amt = float(amount_obj.get("amount", 0))
+    else:
+        amt = float(amount_obj or 0)
+
     if round(amt) != PRICE:
-        return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt} ต้อง ฿{PRICE})"}
+        return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt:.0f} ต้อง ฿{PRICE})"}
 
-    # เช็คผู้รับ — รองรับทั้ง bank และ promptpay/truemoney
-    receiver_bank  = payload.get("receiver", {}).get("bank", {}).get("account", {}).get("name", {})
-    receiver_proxy = payload.get("receiver", {}).get("promptpay", {}).get("account", {}).get("name", {})
-    receiver_name  = receiver_bank or receiver_proxy or {}
-
-    receiver_th   = receiver_name.get("th", "") or ""
-    receiver_en   = receiver_name.get("en", "") or ""
-    receiver_full = f"{receiver_th} {receiver_en}".strip()
-
+    # เช็คผู้รับ
+    receiver_full = _extract_receiver(payload)
     if not any(name.lower() in receiver_full.lower() for name in ACCEPTED_RECEIVERS):
         return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver_full or 'ไม่มี'})"}
 
@@ -196,7 +226,7 @@ class DownRoleSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="select_down_role",  # ← เพิ่ม
+            custom_id="select_down_role",
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -212,7 +242,6 @@ class DownRoleSelect(discord.ui.Select):
 
         chosen_labels = ", ".join(f"`{l}`" for l, _ in chosen)
 
-        # แมป label → channel ID
         DOWN_ROLE_CHANNELS = {
             "Moretime":   int(os.getenv("CH_DOWN_MORETIME",   "0")),
             "Dotashd.v1": int(os.getenv("CH_DOWN_DOTASHD_V1", "0")),
@@ -227,7 +256,6 @@ class DownRoleSelect(discord.ui.Select):
             "Doinluv.04": int(os.getenv("CH_DOWN_DOINLUV_04", "0")),
         }
 
-        # DM แจ้งห้องของยศที่เลือก
         try:
             dm_lines = []
             for label, _ in chosen:
@@ -250,7 +278,6 @@ class DownRoleSelect(discord.ui.Select):
         except Exception:
             pass
 
-        # Log
         log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
             await log_ch.send(embed=discord.Embed(
@@ -279,7 +306,6 @@ class DownRoleSelect(discord.ui.Select):
             view=None,
         )
 
-        # ลบ thread หลังจบ 5 วินาที
         await asyncio.sleep(5)
         thread = interaction.guild.get_thread(self.thread_id)
         if thread:
@@ -294,7 +320,7 @@ class DownRoleSelect(discord.ui.Select):
 
 class DownRoleView(discord.ui.View):
     def __init__(self, order_id: str, thread_id: int):
-        super().__init__(timeout=None)  # ← timeout=None
+        super().__init__(timeout=None)
         self.add_item(DownRoleSelect(order_id, thread_id))
 
 
@@ -303,7 +329,7 @@ class DownRoleView(discord.ui.View):
 # ─────────────────────────────────────────
 class PaymentView(discord.ui.View):
     def __init__(self, order_id: str):
-        super().__init__(timeout=None)  # ← timeout=None
+        super().__init__(timeout=None)
         self.order_id = order_id
 
     def _order(self):
@@ -359,7 +385,7 @@ class PaymentView(discord.ui.View):
 
 class CancelView(discord.ui.View):
     def __init__(self, order_id: str):
-        super().__init__(timeout=None)  # ← timeout=None
+        super().__init__(timeout=None)
         self.order_id = order_id
 
     @discord.ui.button(label="❌ ยกเลิก Order", style=discord.ButtonStyle.danger, custom_id="cancel_order")
@@ -482,10 +508,10 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
     if log_ch:
         e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
         e.add_field(name="User",      value=f"{member.mention} ({member.name})", inline=True)
-        e.add_field(name="ยอด",       value=f"฿{ocr['amount']}",                inline=True)
+        e.add_field(name="ยอด",       value=f"฿{ocr['amount']:.0f}",            inline=True)
         e.add_field(name="วิธีชำระ", value=method,                              inline=True)
         e.add_field(name="Order ID",  value=f"`{order_id}`",                    inline=True)
-        e.add_field(name="ผู้รับ",    value=ocr["receiver"],                    inline=True)
+        e.add_field(name="ผู้รับ",    value=ocr["receiver"] or "-",             inline=True)
         e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
         await log_ch.send(embed=e)
 
@@ -586,8 +612,8 @@ async def on_message(message: discord.Message):
                     await checking_msg.edit(embed=discord.Embed(
                         title="<a:1134verifiedanimated:1495470992452227103> สลิปผ่าน! กำลังมอบยศ...",
                         description=(
-                            f"**ยอด :** ฿{ocr['amount']}\n"
-                            f"**ผู้รับ :** {ocr['receiver']}\n"
+                            f"**ยอด :** ฿{ocr['amount']:.0f}\n"
+                            f"**ผู้รับ :** {ocr['receiver'] or '-'}\n"
                             f"**เวลาสลิป :** {ocr.get('slip_time') or '-'}"
                         ),
                         color=PURPLE,
