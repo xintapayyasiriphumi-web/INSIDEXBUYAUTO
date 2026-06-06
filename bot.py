@@ -196,6 +196,7 @@ class DownRoleSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
+            custom_id="select_down_role",  # ← เพิ่ม
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -293,7 +294,7 @@ class DownRoleSelect(discord.ui.Select):
 
 class DownRoleView(discord.ui.View):
     def __init__(self, order_id: str, thread_id: int):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)  # ← timeout=None
         self.add_item(DownRoleSelect(order_id, thread_id))
 
 
@@ -302,13 +303,13 @@ class DownRoleView(discord.ui.View):
 # ─────────────────────────────────────────
 class PaymentView(discord.ui.View):
     def __init__(self, order_id: str):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)  # ← timeout=None
         self.order_id = order_id
 
     def _order(self):
         return pending_orders.get(self.order_id)
 
-    @discord.ui.button(label="🏦 Bank", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="🏦 Bank", style=discord.ButtonStyle.primary, custom_id="payment_bank")
     async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
         o = self._order()
         if not o:
@@ -332,7 +333,7 @@ class PaymentView(discord.ui.View):
         embed.set_image(url=PAYMENT_IMAGE_URL)
         await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
 
-    @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success, custom_id="payment_truemoney")
     async def truemoney(self, interaction: discord.Interaction, _: discord.ui.Button):
         o = self._order()
         if not o:
@@ -358,10 +359,10 @@ class PaymentView(discord.ui.View):
 
 class CancelView(discord.ui.View):
     def __init__(self, order_id: str):
-        super().__init__(timeout=600)
+        super().__init__(timeout=None)  # ← timeout=None
         self.order_id = order_id
 
-    @discord.ui.button(label="❌ ยกเลิก Order", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="❌ ยกเลิก Order", style=discord.ButtonStyle.danger, custom_id="cancel_order")
     async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button):
         pending_orders.pop(self.order_id, None)
         user_threads.pop(interaction.user.id, None)
