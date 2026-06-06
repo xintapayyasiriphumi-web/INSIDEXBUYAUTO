@@ -3,7 +3,7 @@ INSIDEX Bot — ReShade Edition
 - ซื้อแล้วได้ยศ Reshade ทันที
 - จากนั้นเลือกยศ down- เสริม 1 ตัว
 - ราคา 39.- รวมทุกอย่าง
-- EasySlip API: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที
+- EasySlip API v1: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที
 - ป้องกันสลิปซ้ำ SHA-256
 - Private Thread ต่อ 1 ลูกค้า — ไม่เห็นแชทของคนอื่น
 """
@@ -42,7 +42,14 @@ SHOP_BANNER_URL   = "https://cdn.discordapp.com/attachments/1446487555091730544/
 TH     = timezone(timedelta(hours=7))
 PURPLE = 0x7b2cbf
 
-ACCEPTED_RECEIVERS = ["SIRIPOOM INTAPANYA", "SIRIPHOOM INTAPANYA", "สิริภูมิ อินตะปัญญา"]
+# partial match — จับได้แม้ชื่อถูกตัดหรือมีคำนำหน้า
+ACCEPTED_RECEIVERS = [
+    "SIRIPOOM",
+    "SIRIPHOOM",
+    "สิริภูมิ",
+    "INTAPANYA",
+    "อินตะปัญญา",
+]
 
 # ─────────────────────────────────────────
 #  ROLES
@@ -95,37 +102,25 @@ def save_state():
 
 
 # ─────────────────────────────────────────
-#  EASYSLIP VERIFY
+#  EASYSLIP v1 VERIFY
 # ─────────────────────────────────────────
-def _extract_receiver(payload: dict) -> str:
+def _check_receiver(payload: dict) -> tuple[bool, str]:
     """
-    รองรับ 3 รูปแบบ:
-    1. Bank slip  → receiver.bank.account.name.th / .en
-    2. TrueMoney  → receiver.name (string ตรงๆ)
-    3. PromptPay  → receiver.account.name.th / .en
+    v1 structure: receiver.account.name.th / .en
+    เช็คแยก th และ en ไม่รวม string เพื่อกันชื่อถูกตัด
+    คืน (passed, receiver_display)
     """
-    rec = payload.get("receiver", {})
-
-    # รูปแบบ 1: bank
-    bank_name = rec.get("bank", {}).get("account", {}).get("name", {})
-    if isinstance(bank_name, dict) and (bank_name.get("th") or bank_name.get("en")):
-        th = bank_name.get("th", "") or ""
-        en = bank_name.get("en", "") or ""
-        return f"{th} {en}".strip()
-
-    # รูปแบบ 2: truemoney (receiver.name เป็น string)
-    name_str = rec.get("name")
-    if isinstance(name_str, str) and name_str:
-        return name_str.strip()
-
-    # รูปแบบ 3: promptpay / account.name
+    rec      = payload.get("receiver", {})
     acc_name = rec.get("account", {}).get("name", {})
-    if isinstance(acc_name, dict):
-        th = acc_name.get("th", "") or ""
-        en = acc_name.get("en", "") or ""
-        return f"{th} {en}".strip()
+    th = (acc_name.get("th") or "").strip()
+    en = (acc_name.get("en") or "").strip()
+    display = f"{th} {en}".strip() or "ไม่มี"
 
-    return ""
+    passed = any(
+        kw.lower() in th.lower() or kw.lower() in en.lower()
+        for kw in ACCEPTED_RECEIVERS
+    )
+    return passed, display
 
 
 async def ocr_slip(image_url: str) -> dict:
@@ -144,18 +139,18 @@ async def ocr_slip(image_url: str) -> dict:
 
     now_th = datetime.now(TH)
 
-    # ส่ง EasySlip API
+    # ส่ง EasySlip API v1
     form = aiohttp.FormData()
     form.add_field("file", img_bytes, filename="slip.jpg", content_type=content_type)
 
     async with aiohttp.ClientSession() as s:
         async with s.post(
-            "https://developer.easyslip.com/api/v1/verify",
+            "https://api.easyslip.com/v1/verify",
             headers={"Authorization": f"Bearer {EASYSLIP_API_KEY}"},
             data=form,
             timeout=aiohttp.ClientTimeout(total=30),
         ) as r:
-            if r.status != 200:
+            if r.status not in (200, 400):
                 return {"ok": False, "reason": f"EasySlip error {r.status}"}
             data = await r.json()
 
@@ -166,20 +161,14 @@ async def ocr_slip(image_url: str) -> dict:
     payload = data.get("data", {})
 
     # เช็คยอด
-    amount_obj = payload.get("amount", {})
-    # bank slip → amount.amount | truemoney → amount (ตัวเลขตรง)
-    if isinstance(amount_obj, dict):
-        amt = float(amount_obj.get("amount", 0))
-    else:
-        amt = float(amount_obj or 0)
-
+    amt = float(payload.get("amount", {}).get("amount", 0))
     if round(amt) != PRICE:
         return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt:.0f} ต้อง ฿{PRICE})"}
 
-    # เช็คผู้รับ
-    receiver_full = _extract_receiver(payload)
-    if not any(name.lower() in receiver_full.lower() for name in ACCEPTED_RECEIVERS):
-        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver_full or 'ไม่มี'})"}
+    # เช็คผู้รับ — เช็คแยก th/en
+    passed, receiver_display = _check_receiver(payload)
+    if not passed:
+        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver_display})"}
 
     # เช็คเวลา
     dt_str = payload.get("date", "")
@@ -195,7 +184,7 @@ async def ocr_slip(image_url: str) -> dict:
     return {
         "ok":        True,
         "amount":    amt,
-        "receiver":  receiver_full,
+        "receiver":  receiver_display,
         "slip_time": dt_str,
         "slip_type": "bank",
     }
