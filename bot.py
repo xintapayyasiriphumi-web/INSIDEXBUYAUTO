@@ -3,7 +3,7 @@ INSIDEX Bot — ReShade Edition
 - ซื้อแล้วได้ยศ Reshade ทันที
 - จากนั้นเลือกยศ down- เสริม 1 ตัว
 - ราคา 39.- รวมทุกอย่าง
-- OCR: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที (Claude Vision)
+- EasySlip API: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที
 - ป้องกันสลิปซ้ำ SHA-256
 - Private Thread ต่อ 1 ลูกค้า — ไม่เห็นแชทของคนอื่น
 """
@@ -13,11 +13,9 @@ from discord.ext import commands
 from discord import app_commands
 import aiohttp
 import asyncio
-import base64
 import hashlib
 import json
 import os
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -27,23 +25,24 @@ load_dotenv()
 # ─────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────
-TOKEN             = os.getenv("DISCORD_TOKEN")
-GUILD_ID          = int(os.getenv("GUILD_ID", "0"))
-ADMIN_ROLE_ID     = int(os.getenv("ADMIN_ROLE_ID", "0"))
-LOG_CHANNEL_ID    = int(os.getenv("LOG_CHANNEL_ID", "0"))
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+TOKEN            = os.getenv("DISCORD_TOKEN")
+GUILD_ID         = int(os.getenv("GUILD_ID", "0"))
+ADMIN_ROLE_ID    = int(os.getenv("ADMIN_ROLE_ID", "0"))
+LOG_CHANNEL_ID   = int(os.getenv("LOG_CHANNEL_ID", "0"))
+EASYSLIP_API_KEY = os.getenv("EASYSLIP_API_KEY")
 
 BANK_NAME     = os.getenv("BANK_NAME", "กสิกรไทย (KBank)")
 BANK_ACC_NAME = os.getenv("BANK_ACCOUNT_NAME", "INSIDEX SHOP")
 BANK_ACC_NO   = os.getenv("BANK_ACCOUNT_NUMBER", "XXX-X-XXXXX-X")
-PROMPTPAY     = os.getenv("PROMPTPAY", "0XX-XXX-XXXX")
 TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
 
 PRICE             = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
 SHOP_BANNER_URL   = "https://cdn.discordapp.com/attachments/1446487555091730544/1499837254078697643/21.png?ex=69f63fcb&is=69f4ee4b&hm=03af46f901158128aa3e5758cca55bdd53059f754d9b5b834b2ba77f3503830f&"
-TH                = timezone(timedelta(hours=7))
-PURPLE            = 0x7b2cbf
+TH     = timezone(timedelta(hours=7))
+PURPLE = 0x7b2cbf
+
+ACCEPTED_RECEIVERS = ["SIRIPOOM INTAPANYA", "SIRIPHOOM INTAPANYA", "สิริภูมิ อินตะปัญญา"]
 
 # ─────────────────────────────────────────
 #  ROLES
@@ -54,7 +53,7 @@ DOWN_ROLES = [
     {"label": "Moretime",   "env": "ROLE_DOWN_MORETIME"},
     {"label": "Dotashd.v1", "env": "ROLE_DOWN_DOTASHD_V1"},
     {"label": "Dotashd.v2", "env": "ROLE_DOWN_DOTASHD_V2"},
-    {"label": "Dotashd.wf",  "env": "ROLE_DOWN_DOTASHD_WF"},
+    {"label": "Dotashd.wf", "env": "ROLE_DOWN_DOTASHD_WF"},
     {"label": "Dotashd.v3", "env": "ROLE_DOWN_DOTASHD_V3"},
     {"label": "Dotasuns",   "env": "ROLE_DOWN_DOTASUNS"},
     {"label": "Dotashd.bw", "env": "ROLE_DOWN_DOTASHD_BW"},
@@ -70,12 +69,10 @@ def get_down_role_id(env_key: str) -> int:
 # ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-pending_orders: dict  = {}   # order_id → order dict
-used_slip_hashes: set = set()
-shop_embed_ids: dict  = {}   # channel_id → message_id ของ shop embed
-user_threads: dict    = {}   # user_id → thread_id (กัน spam สร้าง thread ซ้ำ)
-
-
+pending_orders:   dict = {}
+used_slip_hashes: set  = set()
+shop_embed_ids:   dict = {}
+user_threads:     dict = {}
 
 STATE_FILE = "state.json"
 
@@ -84,9 +81,9 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
             data = json.load(f)
-            pending_orders    = data.get("pending_orders", {})
-            used_slip_hashes  = set(data.get("used_slip_hashes", []))
-            user_threads      = {int(k): v for k, v in data.get("user_threads", {}).items()}
+            pending_orders   = data.get("pending_orders", {})
+            used_slip_hashes = set(data.get("used_slip_hashes", []))
+            user_threads     = {int(k): v for k, v in data.get("user_threads", {}).items()}
 
 def save_state():
     with open(STATE_FILE, "w") as f:
@@ -98,9 +95,10 @@ def save_state():
 
 
 # ─────────────────────────────────────────
-#  OCR (Claude Vision)
+#  EASYSLIP VERIFY
 # ─────────────────────────────────────────
 async def ocr_slip(image_url: str) -> dict:
+    # ดาวน์โหลดรูป
     async with aiohttp.ClientSession() as s:
         async with s.get(image_url) as r:
             if r.status != 200:
@@ -108,78 +106,58 @@ async def ocr_slip(image_url: str) -> dict:
             img_bytes    = await r.read()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0]
 
+    # เช็คสลิปซ้ำ
     slip_hash = hashlib.sha256(img_bytes).hexdigest()
     if slip_hash in used_slip_hashes:
         return {"ok": False, "reason": "❌ สลิปนี้ถูกใช้ไปแล้ว"}
 
-    img_b64 = base64.b64encode(img_bytes).decode()
-    now_th  = datetime.now(TH)
+    now_th = datetime.now(TH)
 
-    prompt = (
-        f'คุณคือระบบตรวจสอบสลิปของร้าน INSIDEX\n\n'
-        f'ดูสลิปในรูปแล้วตอบ JSON บรรทัดเดียว ห้ามมีข้อความอื่น:\n\n'
-        f'{{"found_amount":<ตัวเลขยอดโอน หรือ null>,"found_receiver":"<ชื่อผู้รับ หรือ null>",'
-        f'"found_datetime":"<YYYY-MM-DD HH:MM หรือ null>","slip_type":"<bank|truemoney|unknown>"}}\n\n'
-        f'ข้อมูลที่ต้องตรวจ:\n'
-        f'1. ยอดโอนต้องเท่ากับ {PRICE} บาทพอดี\n'
-        f'2. ชื่อผู้รับต้องมีคำว่า "{BANK_ACC_NAME}"\n'
-        f'3. เวลาในสลิปต้องไม่เกิน 30 นาทีจากปัจจุบัน ({now_th.strftime("%Y-%m-%d %H:%M")} เวลาไทย)\n\n'
-        f'ตอบ JSON เท่านั้น'
-    )
-
-    headers = {
-        "x-api-key":         ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type":      "application/json",
-    }
-    body = {
-        "model":      "claude-opus-4-5",
-        "max_tokens": 256,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": content_type, "data": img_b64}},
-                {"type": "text",  "text":  prompt},
-            ],
-        }],
-    }
+    # ส่ง EasySlip API
+    form = aiohttp.FormData()
+    form.add_field("file", img_bytes, filename="slip.jpg", content_type=content_type)
 
     async with aiohttp.ClientSession() as s:
         async with s.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers, json=body,
-            timeout=aiohttp.ClientTimeout(total=60),
+            "https://developer.easyslip.com/api/v1/verify",
+            headers={"Authorization": f"Bearer {EASYSLIP_API_KEY}"},
+            data=form,
+            timeout=aiohttp.ClientTimeout(total=30),
         ) as r:
             if r.status != 200:
-                return {"ok": False, "reason": f"Claude API error {r.status}"}
+                return {"ok": False, "reason": f"EasySlip error {r.status}"}
             data = await r.json()
 
-    raw = data["content"][0]["text"].strip()
-    raw = re.sub(r"```[a-z]*|```", "", raw).strip()
+    if data.get("status") != 200:
+        reason = data.get("message", "ไม่ทราบสาเหตุ")
+        return {"ok": False, "reason": f"❌ ตรวจสลิปไม่ได้: {reason}"}
 
-    try:
-        res = json.loads(raw)
-    except Exception:
-        return {"ok": False, "reason": "อ่านสลิปไม่ได้ กรุณาส่งใหม่"}
+    payload = data.get("data", {})
 
-    amt = res.get("found_amount")
-    if amt is None:
-        return {"ok": False, "reason": "❌ ไม่พบยอดเงินในสลิป"}
-    if int(amt) != PRICE:
+    # เช็คยอด
+    amt = float(payload.get("amount", {}).get("amount", 0))
+    if round(amt) != PRICE:
         return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt} ต้อง ฿{PRICE})"}
 
-    ACCEPTED_RECEIVERS = ["SIRIPHOOM INTAPANYA","SIRIPOOM INTAPANYA", "สิริภูมิ อินตะปัญญา"]
+    # เช็คผู้รับ — รองรับทั้ง bank และ promptpay/truemoney
+    receiver_bank  = payload.get("receiver", {}).get("bank", {}).get("account", {}).get("name", {})
+    receiver_proxy = payload.get("receiver", {}).get("promptpay", {}).get("account", {}).get("name", {})
+    receiver_name  = receiver_bank or receiver_proxy or {}
 
-    receiver = res.get("found_receiver") or ""
-    if not any(name.lower() in receiver.lower() for name in ACCEPTED_RECEIVERS):
-        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver or 'ไม่มี'})"}
+    receiver_th   = receiver_name.get("th", "") or ""
+    receiver_en   = receiver_name.get("en", "") or ""
+    receiver_full = f"{receiver_th} {receiver_en}".strip()
 
-    dt_str = res.get("found_datetime")
+    if not any(name.lower() in receiver_full.lower() for name in ACCEPTED_RECEIVERS):
+        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver_full or 'ไม่มี'})"}
+
+    # เช็คเวลา
+    dt_str = payload.get("date", "")
     if dt_str:
         try:
-            slip_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=TH)
+            slip_dt = datetime.fromisoformat(dt_str).astimezone(TH)
             if (now_th - slip_dt).total_seconds() > 1800:
-                return {"ok": False, "reason": f"❌ สลิปเกิน 30 นาที (เวลาสลิป: {dt_str})"}
+                return {"ok": False, "reason": f"❌ สลิปเกิน 30 นาที (เวลาสลิป: {slip_dt.strftime('%H:%M')})"}
         except Exception:
             pass
 
@@ -187,9 +165,9 @@ async def ocr_slip(image_url: str) -> dict:
     return {
         "ok":        True,
         "amount":    amt,
-        "receiver":  receiver,
+        "receiver":  receiver_full,
         "slip_time": dt_str,
-        "slip_type": res.get("slip_type", "unknown"),
+        "slip_type": "bank",
     }
 
 
@@ -233,7 +211,7 @@ class DownRoleSelect(discord.ui.Select):
 
         chosen_labels = ", ".join(f"`{l}`" for l, _ in chosen)
 
-    # ── แมป label → channel ID ──
+        # แมป label → channel ID
         DOWN_ROLE_CHANNELS = {
             "Moretime":   int(os.getenv("CH_DOWN_MORETIME",   "0")),
             "Dotashd.v1": int(os.getenv("CH_DOWN_DOTASHD_V1", "0")),
@@ -248,7 +226,7 @@ class DownRoleSelect(discord.ui.Select):
             "Doinluv.04": int(os.getenv("CH_DOWN_DOINLUV_04", "0")),
         }
 
-    # ── DM แจ้งห้องของยศที่เลือก ──
+        # DM แจ้งห้องของยศที่เลือก
         try:
             dm_lines = []
             for label, _ in chosen:
@@ -271,7 +249,7 @@ class DownRoleSelect(discord.ui.Select):
         except Exception:
             pass
 
-    # Log
+        # Log
         log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
         if log_ch:
             await log_ch.send(embed=discord.Embed(
@@ -308,7 +286,7 @@ class DownRoleSelect(discord.ui.Select):
                 await thread.delete()
             except Exception:
                 pass
-        # เคลียร์ user_threads
+
         user_threads.pop(interaction.user.id, None)
         save_state()
 
@@ -320,7 +298,7 @@ class DownRoleView(discord.ui.View):
 
 
 # ─────────────────────────────────────────
-#  PAYMENT VIEWS (ใช้ใน thread)
+#  PAYMENT VIEWS
 # ─────────────────────────────────────────
 class PaymentView(discord.ui.View):
     def __init__(self, order_id: str):
@@ -367,9 +345,7 @@ class PaymentView(discord.ui.View):
                 f"🎨 **ReShade Pack**\n"
                 f"━━━━━━━━━━━━━━━━\n"
                 f"💰 **ยอดชำระ : ฿{PRICE}**\n\n"
-                f"```\n"
-                f"เบอร์รับเงิน : {TRUE_NUMBER}\n"
-                f"```\n"
+                f"```\nเบอร์รับเงิน : {TRUE_NUMBER}\n```\n"
                 f"🔖 **Order ID :** `{self.order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
                 "> ระบบตรวจอัตโนมัติ ~10 วินาที"
@@ -387,7 +363,7 @@ class CancelView(discord.ui.View):
 
     @discord.ui.button(label="❌ ยกเลิก Order", style=discord.ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button):
-        order = pending_orders.pop(self.order_id, None)
+        pending_orders.pop(self.order_id, None)
         user_threads.pop(interaction.user.id, None)
         save_state()
         await interaction.response.edit_message(
@@ -415,35 +391,32 @@ class ShopEmbedView(discord.ui.View):
 
 
 # ─────────────────────────────────────────
-#  ORDER START — สร้าง Private Thread
+#  ORDER START
 # ─────────────────────────────────────────
 async def _start_order(interaction: discord.Interaction):
-    member   = interaction.user
-    channel  = interaction.channel
+    member  = interaction.user
+    channel = interaction.channel
 
-    # ถ้ามี thread เดิมของ user อยู่แล้ว → ชี้ไปที่เดิม
     existing_thread_id = user_threads.get(member.id)
     if existing_thread_id:
         existing = interaction.guild.get_thread(existing_thread_id)
-        if existing:  # ← indent ให้อยู่ใต้ if existing_thread_id
+        if existing:
             return await interaction.response.send_message(
                 f"❗ คุณมี order ค้างอยู่แล้ว → {existing.mention}",
                 ephemeral=True
             )
         else:
-            # thread หายไปแล้ว → เคลียร์ทิ้ง
             user_threads.pop(member.id, None)
             for oid in [o for o, v in pending_orders.items() if v["user_id"] == member.id]:
                 pending_orders.pop(oid, None)
 
     order_id = str(uuid.uuid4())[:8].upper()
 
-    # สร้าง Private Thread
     try:
         thread = await channel.create_thread(
             name=f"🛒 {member.display_name} · {order_id}",
             type=discord.ChannelType.private_thread,
-            invitable=False,   # ลูกค้าเชิญคนอื่นเข้าไม่ได้
+            invitable=False,
             auto_archive_duration=60,
         )
         await thread.add_user(member)
@@ -453,7 +426,6 @@ async def _start_order(interaction: discord.Interaction):
         )
 
     user_threads[member.id] = thread.id
-
     pending_orders[order_id] = {
         "user_id":        member.id,
         "user_name":      member.name,
@@ -462,10 +434,8 @@ async def _start_order(interaction: discord.Interaction):
         "payment_method": None,
         "timestamp":      datetime.now(TH).isoformat(),
     }
-    
     save_state()
 
-    # ส่ง embed ใน thread
     embed = discord.Embed(
         title="🛒 สั่งซื้อ ReShade",
         description=(
@@ -480,8 +450,6 @@ async def _start_order(interaction: discord.Interaction):
         color=PURPLE,
     )
     await thread.send(embed=embed, view=PaymentView(order_id))
-
-    # แจ้ง ephemeral ให้ลูกค้าไปที่ thread
     await interaction.response.send_message(
         f"<a:1134verifiedanimated:1495470992452227103> สร้างห้องส่วนตัวให้แล้ว กดที่นี่ → {thread.mention}",
         ephemeral=True
@@ -489,14 +457,13 @@ async def _start_order(interaction: discord.Interaction):
 
 
 # ─────────────────────────────────────────
-#  GRANT: Reshade + dropdown down-
+#  GRANT
 # ─────────────────────────────────────────
 async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
     reshade_role = guild.get_role(ROLE_RESHADE_ID)
     if reshade_role:
         await member.add_roles(reshade_role, reason=f"INSIDEX {order_id}")
 
-    # DM
     try:
         await member.send(embed=discord.Embed(
             title="<a:1134verifiedanimated:1495470992452227103> ได้รับยศ Reshade แล้ว!",
@@ -510,7 +477,6 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
     except Exception:
         pass
 
-    # Log
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if log_ch:
         e = discord.Embed(title="💳 Purchase — ReShade", color=PURPLE, timestamp=datetime.now())
@@ -522,7 +488,6 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
         e.add_field(name="เวลาสลิป", value=ocr.get("slip_time") or "-",        inline=True)
         await log_ch.send(embed=e)
 
-    # ส่ง dropdown เลือก down- ใน thread
     await thread.send(
         content=member.mention,
         embed=discord.Embed(
@@ -539,7 +504,9 @@ async def grant_reshade_and_pick(thread, guild, member, order_id, ocr, method):
     )
 
 
-
+# ─────────────────────────────────────────
+#  CLEANUP TASK
+# ─────────────────────────────────────────
 async def cleanup_expired_orders():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -560,22 +527,23 @@ async def cleanup_expired_orders():
                             await thread.delete()
                         except Exception:
                             pass
-        if expired:       # ✅ เพิ่ม — save เฉพาะตอนมีการลบ
-            save_state()  # ✅ เพิ่ม
+        if expired:
+            save_state()
         await asyncio.sleep(300)
+
 
 # ─────────────────────────────────────────
 #  EVENTS
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
-    load_state()  # ✅ เพิ่ม
+    load_state()
     print(f"✅ INSIDEX Bot: {bot.user}")
     bot.add_view(ShopEmbedView())
     bot.add_view(PaymentView(""))
     bot.add_view(CancelView(""))
     bot.add_view(DownRoleView("", 0))
-    bot.loop.create_task(cleanup_expired_orders())
+    asyncio.ensure_future(cleanup_expired_orders())
     try:
         synced = await bot.tree.sync()
         print(f"✅ Synced {len(synced)} commands")
@@ -588,7 +556,6 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    # รับสลิปเฉพาะใน thread ของ order
     if isinstance(message.channel, discord.Thread) and message.attachments:
         att = message.attachments[0]
         if att.content_type and att.content_type.startswith("image/"):
@@ -605,7 +572,7 @@ async def on_message(message: discord.Message):
 
                 checking_msg = await message.reply(embed=discord.Embed(
                     title="🔍 กำลังตรวจสอบสลิป...",
-                    description="> OCR กำลังอ่านข้อมูล\n> กรุณารอสักครู่ (~10 วินาที)",
+                    description="> กำลังอ่านข้อมูล\n> กรุณารอสักครู่ (~10 วินาที)",
                     color=PURPLE,
                 ))
 
@@ -654,7 +621,7 @@ async def setup_shop(interaction: discord.Interaction):
         title="🎨 RESHADE AUTO BUY",
         description=(
             "**:shopping_cart: บริการจำหน่าย Reshade อัตโนมัติ**\n"
-            "ถ้าต้องการบริการลง Reshade สามารถกด https://discord.com/channels/1400021255528382526/1432715699138072699 มาได้เลยนะครับ ค่า่บริการ **15.-**\n\n"
+            "ถ้าต้องการบริการลง Reshade สามารถกด https://discord.com/channels/1400021255528382526/1432715699138072699 มาได้เลยนะครับ ค่าบริการ **15.-**\n\n"
             f"**ราคา : ฿{PRICE}**\n\n"
             "ซื้อแล้วได้ :\n"
             "<a:1134verifiedanimated:1495470992452227103> ได้ยศ **Reshade** ทันที\n"
@@ -687,7 +654,8 @@ async def give_reshade(interaction: discord.Interaction, member: discord.Member,
     if roles_to_add:
         await member.add_roles(*roles_to_add)
     await interaction.response.send_message(
-        f"<a:1134verifiedanimated:1495470992452227103> มอบ **Reshade** + **{chosen_label}** ให้ {member.mention} แล้ว", ephemeral=True
+        f"<a:1134verifiedanimated:1495470992452227103> มอบ **Reshade** + **{chosen_label}** ให้ {member.mention} แล้ว",
+        ephemeral=True
     )
     try:
         await member.send(embed=discord.Embed(
@@ -713,8 +681,6 @@ async def orders_cmd(interaction: discord.Interaction):
             inline=False,
         )
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
 
 
 # ─────────────────────────────────────────
