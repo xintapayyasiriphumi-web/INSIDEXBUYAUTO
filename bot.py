@@ -293,58 +293,52 @@ class PaymentView(discord.ui.View):
     def _order(self):
         return pending_orders.get(self.order_id)
 
-    @discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary, custom_id="payment_bank")
-    async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
-        o = self._order()
-        if not o:
-            return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
-        o["payment_method"] = "bank"
-        o["status"]         = "waiting_slip"
-        total = o["total_price"]
+@discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary, custom_id="payment_bank")
+async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
+    o = self._order()
+    if not o:
+        return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
+    o["payment_method"] = "bank"
+    o["status"]         = "waiting_slip"
+    total = o["total_price"]
 
-        # defer ก่อนเพราะ generate QR อาจใช้เวลา
-        await interaction.response.defer()
+    await interaction.response.defer()
 
-        # สร้าง QR PromptPay ล็อกยอด
-        qr_bytes = await generate_promptpay_qr(total)
+    qr_bytes = await generate_promptpay_qr(total)
 
-        embed = discord.Embed(
-            title="🏦 โอนผ่านธนาคาร / PromptPay",
-            description=(
-                f"**สินค้า :** 🎨 ReShade x{len(o['chosen_labels'])} ตัว\n"
-                f"**ยอดรวม : ฿{total}**\n\n"
-                f"```\nธนาคาร    : {BANK_NAME}\n"
-                f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
-                f"🔖 Order ID : `{self.order_id}`\n\n"
-                "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
-                "> ระบบตรวจอัตโนมัติ ~10 วินาที"
-            ),
-            color=PURPLE,
+    embed = discord.Embed(
+        title="🏦 โอนผ่านธนาคาร / PromptPay",
+        description=(
+            f"**สินค้า :** 🎨 ReShade x{len(o['chosen_labels'])} ตัว\n"
+            f"**ยอดรวม : ฿{total}**\n\n"
+            f"```\nธนาคาร    : {BANK_NAME}\n"
+            f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
+            f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
+            f"🔖 Order ID : `{self.order_id}`\n\n"
+            "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
+            "> ระบบตรวจอัตโนมัติ ~10 วินาที"
+        ),
+        color=PURPLE,
+    )
+
+    if qr_bytes:
+        qr_file = discord.File(
+            fp=__import__("io").BytesIO(qr_bytes),
+            filename="promptpay_qr.png",
         )
-
-        if qr_bytes:
-            # แนบ QR เป็น file
-            qr_file = discord.File(
-                fp=__import__("io").BytesIO(qr_bytes),
-                filename="promptpay_qr.png",
-            )
-            embed.set_image(url="attachment://promptpay_qr.png")
-            embed.set_footer(text=f"QR PromptPay ล็อกยอด ฿{total} | สแกนแล้วโอนได้เลย")
-            await interaction.followup.edit_message(
-                message_id=interaction.message.id,
-                embed=embed,
-                attachments=[qr_file],
-                view=CancelView(self.order_id),
-            )
-        else:
-            # QR generate ล้มเหลว → fallback แสดงรูป payment ปกติ
-            embed.set_image(url=PAYMENT_IMAGE_URL)
-            await interaction.followup.edit_message(
-                message_id=interaction.message.id,
-                embed=embed,
-                view=CancelView(self.order_id),
-            )
+        embed.set_image(url="attachment://promptpay_qr.png")
+        embed.set_footer(text=f"QR PromptPay ล็อกยอด ฿{total} | สแกนแล้วโอนได้เลย")
+        await interaction.edit_original_response(  # ← เปลี่ยนตรงนี้
+            embed=embed,
+            attachments=[qr_file],
+            view=CancelView(self.order_id),
+        )
+    else:
+        embed.set_image(url=PAYMENT_IMAGE_URL)
+        await interaction.edit_original_response(  # ← เปลี่ยนตรงนี้
+            embed=embed,
+            view=CancelView(self.order_id),
+        )
 
     @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success, custom_id="payment_truemoney")
     async def truemoney(self, interaction: discord.Interaction, _: discord.ui.Button):
