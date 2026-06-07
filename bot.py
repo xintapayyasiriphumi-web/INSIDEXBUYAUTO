@@ -339,7 +339,7 @@ class PaymentView(discord.ui.View):
         if qr_bytes:
             qr_file = discord.File(fp=BytesIO(qr_bytes), filename="promptpay_qr.png")
             embed.set_image(url="attachment://promptpay_qr.png")
-            embed.set_footer(text=f"order:{order_id} | QR PromptPay ล็อกยอด ฿{total}")
+            embed.set_footer(text=f"order:{order_id} | QR PromptPay ยอดรวม ฿{total}")
             await interaction.edit_original_response(
                 embed=embed,
                 attachments=[qr_file],
