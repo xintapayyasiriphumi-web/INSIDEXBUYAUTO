@@ -5,6 +5,7 @@ INSIDEX Bot — ReShade Edition
 - QR PromptPay ล็อกยอดอัตโนมัติตาม order (เฉพาะ Bank)
 - ป้องกันสลิปซ้ำ SHA-256
 - Private Thread ต่อ 1 ลูกค้า
+- Restore order_id จาก embed footer หลัง bot restart
 """
 
 import discord
@@ -18,6 +19,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -35,7 +37,7 @@ BANK_NAME     = os.getenv("BANK_NAME", "กสิกรไทย (KBank)")
 BANK_ACC_NAME = os.getenv("BANK_ACCOUNT_NAME", "INSIDEX SHOP")
 BANK_ACC_NO   = os.getenv("BANK_ACCOUNT_NUMBER", "XXX-X-XXXXX-X")
 TRUE_NUMBER   = os.getenv("TRUEMONEY_NUMBER", "0XX-XXX-XXXX")
-PROMPTPAY_NO  = "0822099267"  # เบอร์สร้าง QR PromptPay
+PROMPTPAY_NO  = "0822099267"
 
 PRICE_PER_ITEM    = int(os.getenv("RESHADE_PRICE", "39"))
 PAYMENT_IMAGE_URL = "https://media.discordapp.net/attachments/1446487555091730544/1496205096734949516/39.png?ex=69f58f55&is=69f43dd5&hm=a06185f0dc2fee0564e92d3093ffa03f4fe47e23dd65c451e794cd416853c891&format=webp&quality=lossless&width=1037&height=1037&"
@@ -112,10 +114,22 @@ def save_state():
 
 
 # ─────────────────────────────────────────
+#  HELPER: ดึง order_id จาก embed footer
+# ─────────────────────────────────────────
+def _get_order_id(self_order_id: str, interaction: discord.Interaction) -> str:
+    """ถ้า order_id ว่าง (หลัง bot restart) ดึงจาก embed footer"""
+    if self_order_id:
+        return self_order_id
+    for embed in interaction.message.embeds:
+        if embed.footer and embed.footer.text and embed.footer.text.startswith("order:"):
+            return embed.footer.text.replace("order:", "").strip()
+    return ""
+
+
+# ─────────────────────────────────────────
 #  EASYSLIP: สร้าง QR PromptPay
 # ─────────────────────────────────────────
 async def generate_promptpay_qr(amount: int) -> bytes | None:
-    """คืน PNG bytes ของ QR หรือ None ถ้า error"""
     async with aiohttp.ClientSession() as s:
         async with s.post(
             "https://api.easyslip.com/v1/qr/generate",
@@ -136,9 +150,7 @@ async def generate_promptpay_qr(amount: int) -> bytes | None:
 
     if data.get("status") != 200:
         return None
-
-    img_b64 = data["data"]["image"]
-    return base64.b64decode(img_b64)
+    return base64.b64decode(data["data"]["image"])
 
 
 # ─────────────────────────────────────────
@@ -279,6 +291,8 @@ class ReshadeSelectMenu(discord.ui.Select):
             ),
             color=PURPLE,
         )
+        # เก็บ order_id ใน footer เพื่อ restore หลัง bot restart
+        embed.set_footer(text=f"order:{self.order_id}")
         await interaction.response.edit_message(embed=embed, view=PaymentView(self.order_id))
 
 
@@ -290,64 +304,66 @@ class PaymentView(discord.ui.View):
         super().__init__(timeout=None)
         self.order_id = order_id
 
-    def _order(self):
-        return pending_orders.get(self.order_id)
+    @discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary, custom_id="payment_bank")
+    async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
+        # restore order_id จาก footer ถ้า bot restart
+        order_id = _get_order_id(self.order_id, interaction)
+        o = pending_orders.get(order_id)
+        if not o:
+            return await interaction.response.send_message("❌ Order หมดอายุ กรุณาสั่งซื้อใหม่", ephemeral=True)
 
-@discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary, custom_id="payment_bank")
-async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
-    o = self._order()
-    if not o:
-        return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
-    o["payment_method"] = "bank"
-    o["status"]         = "waiting_slip"
-    total = o["total_price"]
+        o["payment_method"] = "bank"
+        o["status"]         = "waiting_slip"
+        total = o["total_price"]
 
-    await interaction.response.defer()
+        await interaction.response.defer()
 
-    qr_bytes = await generate_promptpay_qr(total)
+        qr_bytes = await generate_promptpay_qr(total)
 
-    embed = discord.Embed(
-        title="🏦 โอนผ่านธนาคาร / PromptPay",
-        description=(
-            f"**สินค้า :** 🎨 ReShade x{len(o['chosen_labels'])} ตัว\n"
-            f"**ยอดรวม : ฿{total}**\n\n"
-            f"```\nธนาคาร    : {BANK_NAME}\n"
-            f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
-            f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
-            f"🔖 Order ID : `{self.order_id}`\n\n"
-            "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
-            "> ระบบตรวจอัตโนมัติ ~10 วินาที"
-        ),
-        color=PURPLE,
-    )
-
-    if qr_bytes:
-        qr_file = discord.File(
-            fp=__import__("io").BytesIO(qr_bytes),
-            filename="promptpay_qr.png",
+        embed = discord.Embed(
+            title="🏦 โอนผ่านธนาคาร / PromptPay",
+            description=(
+                f"**สินค้า :** 🎨 ReShade x{len(o['chosen_labels'])} ตัว\n"
+                f"**ยอดรวม : ฿{total}**\n\n"
+                f"```\nธนาคาร    : {BANK_NAME}\n"
+                f"ชื่อบัญชี : {BANK_ACC_NAME}\n"
+                f"เลขบัญชี  : {BANK_ACC_NO}\n```\n"
+                f"🔖 Order ID : `{order_id}`\n\n"
+                "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
+                "> ระบบตรวจอัตโนมัติ ~10 วินาที"
+            ),
+            color=PURPLE,
         )
-        embed.set_image(url="attachment://promptpay_qr.png")
-        embed.set_footer(text=f"QR PromptPay ล็อกยอด ฿{total} | สแกนแล้วโอนได้เลย")
-        await interaction.edit_original_response(  # ← เปลี่ยนตรงนี้
-            embed=embed,
-            attachments=[qr_file],
-            view=CancelView(self.order_id),
-        )
-    else:
-        embed.set_image(url=PAYMENT_IMAGE_URL)
-        await interaction.edit_original_response(  # ← เปลี่ยนตรงนี้
-            embed=embed,
-            view=CancelView(self.order_id),
-        )
+        embed.set_footer(text=f"order:{order_id}")
+
+        if qr_bytes:
+            qr_file = discord.File(fp=BytesIO(qr_bytes), filename="promptpay_qr.png")
+            embed.set_image(url="attachment://promptpay_qr.png")
+            embed.set_footer(text=f"order:{order_id} | QR PromptPay ล็อกยอด ฿{total}")
+            await interaction.edit_original_response(
+                embed=embed,
+                attachments=[qr_file],
+                view=CancelView(order_id),
+            )
+        else:
+            embed.set_image(url=PAYMENT_IMAGE_URL)
+            await interaction.edit_original_response(
+                embed=embed,
+                view=CancelView(order_id),
+            )
 
     @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success, custom_id="payment_truemoney")
     async def truemoney(self, interaction: discord.Interaction, _: discord.ui.Button):
-        o = self._order()
+        # restore order_id จาก footer ถ้า bot restart
+        order_id = _get_order_id(self.order_id, interaction)
+        o = pending_orders.get(order_id)
         if not o:
-            return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
+            return await interaction.response.send_message("❌ Order หมดอายุ กรุณาสั่งซื้อใหม่", ephemeral=True)
+
         o["payment_method"] = "truemoney"
         o["status"]         = "waiting_slip"
         total = o["total_price"]
+
         embed = discord.Embed(
             title="💰 โอนผ่าน TrueMoney Wallet",
             description=(
@@ -355,14 +371,15 @@ async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
                 f"━━━━━━━━━━━━━━━━\n"
                 f"💰 **ยอดชำระ : ฿{total}**\n\n"
                 f"```\nเบอร์รับเงิน : {TRUE_NUMBER}\n```\n"
-                f"🔖 **Order ID :** `{self.order_id}`\n\n"
+                f"🔖 **Order ID :** `{order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
                 "> ระบบตรวจอัตโนมัติ ~10 วินาที"
             ),
             color=PURPLE,
         )
         embed.set_image(url=PAYMENT_IMAGE_URL)
-        await interaction.response.edit_message(embed=embed, view=CancelView(self.order_id))
+        embed.set_footer(text=f"order:{order_id}")
+        await interaction.response.edit_message(embed=embed, view=CancelView(order_id))
 
 
 class CancelView(discord.ui.View):
@@ -372,7 +389,8 @@ class CancelView(discord.ui.View):
 
     @discord.ui.button(label="❌ ยกเลิก Order", style=discord.ButtonStyle.danger, custom_id="cancel_order")
     async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button):
-        pending_orders.pop(self.order_id, None)
+        order_id = _get_order_id(self.order_id, interaction)
+        pending_orders.pop(order_id, None)
         user_threads.pop(interaction.user.id, None)
         save_state()
         await interaction.response.edit_message(
@@ -459,6 +477,7 @@ async def _start_order(interaction: discord.Interaction):
         ),
         color=PURPLE,
     )
+    embed.set_footer(text=f"order:{order_id}")
     await thread.send(embed=embed, view=SelectReshadeView(order_id))
     await interaction.response.send_message(
         f"<a:1134verifiedanimated:1495470992452227103> สร้างห้องส่วนตัวให้แล้ว กดที่นี่ → {thread.mention}",
