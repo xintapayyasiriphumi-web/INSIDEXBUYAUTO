@@ -121,8 +121,10 @@ def _get_order_id(self_order_id: str, interaction: discord.Interaction) -> str:
     if self_order_id:
         return self_order_id
     for embed in interaction.message.embeds:
-        if embed.footer and embed.footer.text and embed.footer.text.startswith("order:"):
-            return embed.footer.text.replace("order:", "").strip()
+        if embed.footer and embed.footer.text and "order:" in embed.footer.text:
+            # ดึงแค่ส่วนแรกก่อน | เผื่อมี suffix เช่น "order:XXXX | QR PromptPay..."
+            raw = embed.footer.text.split("|")[0]
+            return raw.replace("order:", "").strip()
     return ""
 
 
@@ -130,27 +132,29 @@ def _get_order_id(self_order_id: str, interaction: discord.Interaction) -> str:
 #  EASYSLIP: สร้าง QR PromptPay
 # ─────────────────────────────────────────
 async def generate_promptpay_qr(amount: int) -> bytes | None:
-    async with aiohttp.ClientSession() as s:
-        async with s.post(
-            "https://api.easyslip.com/v1/qr/generate",
-            headers={
-                "Authorization": f"Bearer {EASYSLIP_API_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "type":   "PROMPTPAY",
-                "msisdn": PROMPTPAY_NO,
-                "amount": float(amount),
-            },
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as r:
-            if r.status != 200:
-                return None
-            data = await r.json()
-
-    if data.get("status") != 200:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                "https://api.easyslip.com/v1/qr/generate",
+                headers={
+                    "Authorization": f"Bearer {EASYSLIP_API_KEY}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "type":   "PROMPTPAY",
+                    "msisdn": PROMPTPAY_NO,
+                    "amount": float(amount),
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                if r.status != 200:
+                    return None
+                data = await r.json()
+        if data.get("status") != 200:
+            return None
+        return base64.b64decode(data["data"]["image"])
+    except Exception:
         return None
-    return base64.b64decode(data["data"]["image"])
 
 
 # ─────────────────────────────────────────
@@ -243,7 +247,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ─────────────────────────────────────────
 class SelectReshadeView(discord.ui.View):
     def __init__(self, order_id: str):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)  # ← None เพื่อ survive restart
         self.add_item(ReshadeSelectMenu(order_id))
 
 
@@ -263,9 +267,11 @@ class ReshadeSelectMenu(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        order = pending_orders.get(self.order_id)
+        # restore order_id จาก footer ถ้า bot restart
+        order_id = self.order_id or _get_order_id("", interaction)
+        order = pending_orders.get(order_id)
         if not order:
-            return await interaction.response.send_message("❌ Order หมดอายุ", ephemeral=True)
+            return await interaction.response.send_message("❌ Order หมดอายุ กรุณาสั่งซื้อใหม่", ephemeral=True)
 
         chosen_envs   = self.values
         chosen_labels = [r["label"] for r in DOWN_ROLES if r["env"] in chosen_envs]
@@ -286,14 +292,13 @@ class ReshadeSelectMenu(discord.ui.Select):
                 f"━━━━━━━━━━━━━━━━\n"
                 f"💰 **ยอดรวม : ฿{total}**\n"
                 f"*(ตัวละ ฿{PRICE_PER_ITEM})*\n\n"
-                f"🔖 Order ID : `{self.order_id}`\n\n"
+                f"🔖 Order ID : `{order_id}`\n\n"
                 "เลือกวิธีชำระด้านล่าง"
             ),
             color=PURPLE,
         )
-        # เก็บ order_id ใน footer เพื่อ restore หลัง bot restart
-        embed.set_footer(text=f"order:{self.order_id}")
-        await interaction.response.edit_message(embed=embed, view=PaymentView(self.order_id))
+        embed.set_footer(text=f"order:{order_id}")
+        await interaction.response.edit_message(embed=embed, view=PaymentView(order_id))
 
 
 # ─────────────────────────────────────────
@@ -306,7 +311,6 @@ class PaymentView(discord.ui.View):
 
     @discord.ui.button(label="🏦 Bank / PromptPay", style=discord.ButtonStyle.primary, custom_id="payment_bank")
     async def bank(self, interaction: discord.Interaction, _: discord.ui.Button):
-        # restore order_id จาก footer ถ้า bot restart
         order_id = _get_order_id(self.order_id, interaction)
         o = pending_orders.get(order_id)
         if not o:
@@ -316,6 +320,7 @@ class PaymentView(discord.ui.View):
         o["status"]         = "waiting_slip"
         total = o["total_price"]
 
+        # defer ก่อน เพราะ generate QR อาจใช้เวลา
         await interaction.response.defer()
 
         qr_bytes = await generate_promptpay_qr(total)
@@ -334,7 +339,6 @@ class PaymentView(discord.ui.View):
             ),
             color=PURPLE,
         )
-        embed.set_footer(text=f"order:{order_id}")
 
         if qr_bytes:
             qr_file = discord.File(fp=BytesIO(qr_bytes), filename="promptpay_qr.png")
@@ -347,6 +351,7 @@ class PaymentView(discord.ui.View):
             )
         else:
             embed.set_image(url=PAYMENT_IMAGE_URL)
+            embed.set_footer(text=f"order:{order_id}")
             await interaction.edit_original_response(
                 embed=embed,
                 view=CancelView(order_id),
@@ -354,7 +359,6 @@ class PaymentView(discord.ui.View):
 
     @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success, custom_id="payment_truemoney")
     async def truemoney(self, interaction: discord.Interaction, _: discord.ui.Button):
-        # restore order_id จาก footer ถ้า bot restart
         order_id = _get_order_id(self.order_id, interaction)
         o = pending_orders.get(order_id)
         if not o:
@@ -599,6 +603,7 @@ async def on_ready():
     load_state()
     print(f"✅ INSIDEX Bot: {bot.user}")
     bot.add_view(ShopEmbedView())
+    bot.add_view(SelectReshadeView(""))  # ← เพิ่ม: restore หลัง restart
     bot.add_view(PaymentView(""))
     bot.add_view(CancelView(""))
     asyncio.ensure_future(cleanup_expired_orders())
