@@ -1,7 +1,8 @@
 """
 INSIDEX Bot — ReShade Edition
 - เลือก Reshade ได้หลายตัว ราคาตัวละ ฿39
-- EasySlip API v1: ตรวจยอด + ชื่อผู้รับ + เวลา ≤30 นาที
+- Bank: EasySlip API v1
+- TrueMoney: Claude Vision OCR
 - QR PromptPay ล็อกยอดอัตโนมัติตาม order (เฉพาะ Bank)
 - ป้องกันสลิปซ้ำ SHA-256
 - Private Thread ต่อ 1 ลูกค้า
@@ -17,6 +18,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -27,11 +29,12 @@ load_dotenv()
 # ─────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────
-TOKEN            = os.getenv("DISCORD_TOKEN")
-GUILD_ID         = int(os.getenv("GUILD_ID", "0"))
-ADMIN_ROLE_ID    = int(os.getenv("ADMIN_ROLE_ID", "0"))
-LOG_CHANNEL_ID   = int(os.getenv("LOG_CHANNEL_ID", "0"))
-EASYSLIP_API_KEY = os.getenv("EASYSLIP_API_KEY")
+TOKEN             = os.getenv("DISCORD_TOKEN")
+GUILD_ID          = int(os.getenv("GUILD_ID", "0"))
+ADMIN_ROLE_ID     = int(os.getenv("ADMIN_ROLE_ID", "0"))
+LOG_CHANNEL_ID    = int(os.getenv("LOG_CHANNEL_ID", "0"))
+EASYSLIP_API_KEY  = os.getenv("EASYSLIP_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 BANK_NAME     = os.getenv("BANK_NAME", "กสิกรไทย (KBank)")
 BANK_ACC_NAME = os.getenv("BANK_ACCOUNT_NAME", "INSIDEX SHOP")
@@ -117,12 +120,10 @@ def save_state():
 #  HELPER: ดึง order_id จาก embed footer
 # ─────────────────────────────────────────
 def _get_order_id(self_order_id: str, interaction: discord.Interaction) -> str:
-    """ถ้า order_id ว่าง (หลัง bot restart) ดึงจาก embed footer"""
     if self_order_id:
         return self_order_id
     for embed in interaction.message.embeds:
         if embed.footer and embed.footer.text and "order:" in embed.footer.text:
-            # ดึงแค่ส่วนแรกก่อน | เผื่อมี suffix เช่น "order:XXXX | QR PromptPay..."
             raw = embed.footer.text.split("|")[0]
             return raw.replace("order:", "").strip()
     return ""
@@ -158,7 +159,7 @@ async def generate_promptpay_qr(amount: int) -> bytes | None:
 
 
 # ─────────────────────────────────────────
-#  EASYSLIP: ตรวจสลิป
+#  VERIFY: Bank → EasySlip
 # ─────────────────────────────────────────
 def _check_receiver(payload: dict) -> tuple:
     rec      = payload.get("receiver", {})
@@ -173,7 +174,8 @@ def _check_receiver(payload: dict) -> tuple:
     return passed, display
 
 
-async def ocr_slip(image_url: str, expected_amount: int) -> dict:
+async def verify_bank_slip(image_url: str, expected_amount: int) -> dict:
+    """ตรวจสลิปธนาคาร/PromptPay ด้วย EasySlip API"""
     async with aiohttp.ClientSession() as s:
         async with s.get(image_url) as r:
             if r.status != 200:
@@ -234,6 +236,117 @@ async def ocr_slip(image_url: str, expected_amount: int) -> dict:
 
 
 # ─────────────────────────────────────────
+#  VERIFY: TrueMoney → Claude Vision
+# ─────────────────────────────────────────
+async def verify_truemoney_slip(image_url: str, expected_amount: int) -> dict:
+    """ตรวจสลิป TrueMoney Wallet ด้วย Claude Vision"""
+    async with aiohttp.ClientSession() as s:
+        async with s.get(image_url) as r:
+            if r.status != 200:
+                return {"ok": False, "reason": "ดาวน์โหลดรูปไม่สำเร็จ"}
+            img_bytes    = await r.read()
+            content_type = r.headers.get("content-type", "image/jpeg").split(";")[0]
+
+    slip_hash = hashlib.sha256(img_bytes).hexdigest()
+    if slip_hash in used_slip_hashes:
+        return {"ok": False, "reason": "❌ สลิปนี้ถูกใช้ไปแล้ว"}
+
+    now_th  = datetime.now(TH)
+    img_b64 = base64.b64encode(img_bytes).decode()
+
+    # ชื่อผู้รับที่ยอมรับ
+    accepted_str = ", ".join(ACCEPTED_RECEIVERS)
+
+    prompt = (
+        f'คุณคือระบบตรวจสอบสลิป TrueMoney Wallet ของร้าน INSIDEX\n\n'
+        f'ดูสลิปในรูปแล้วตอบ JSON บรรทัดเดียว ห้ามมีข้อความอื่น:\n\n'
+        f'{{"found_amount":<ตัวเลขยอดโอน หรือ null>,'
+        f'"found_receiver":"<ชื่อผู้รับ หรือ null>",'
+        f'"found_datetime":"<YYYY-MM-DD HH:MM หรือ null>"}}\n\n'
+        f'ข้อมูลที่ต้องตรวจ:\n'
+        f'1. ยอดโอนต้องเท่ากับ {expected_amount} บาทพอดี\n'
+        f'2. ชื่อผู้รับต้องมีคำใดคำหนึ่งจาก: {accepted_str}\n'
+        f'3. เวลาในสลิปต้องไม่เกิน 30 นาทีจากปัจจุบัน ({now_th.strftime("%Y-%m-%d %H:%M")} เวลาไทย)\n\n'
+        f'ตอบ JSON เท่านั้น'
+    )
+
+    headers = {
+        "x-api-key":         ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type":      "application/json",
+    }
+    body = {
+        "model":      "claude-opus-4-5",
+        "max_tokens": 256,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": content_type, "data": img_b64}},
+                {"type": "text",  "text":  prompt},
+            ],
+        }],
+    }
+
+    async with aiohttp.ClientSession() as s:
+        async with s.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers, json=body,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as r:
+            if r.status != 200:
+                return {"ok": False, "reason": f"Claude API error {r.status}"}
+            data = await r.json()
+
+    raw = data["content"][0]["text"].strip()
+    raw = re.sub(r"```[a-z]*|```", "", raw).strip()
+
+    try:
+        res = json.loads(raw)
+    except Exception:
+        return {"ok": False, "reason": "อ่านสลิปไม่ได้ กรุณาส่งใหม่"}
+
+    # เช็คยอด
+    amt = res.get("found_amount")
+    if amt is None:
+        return {"ok": False, "reason": "❌ ไม่พบยอดเงินในสลิป"}
+    if round(float(amt)) != expected_amount:
+        return {"ok": False, "reason": f"❌ ยอดไม่ตรง (พบ ฿{amt} ต้อง ฿{expected_amount})"}
+
+    # เช็คผู้รับ
+    receiver = res.get("found_receiver") or ""
+    if not any(kw.lower() in receiver.lower() for kw in ACCEPTED_RECEIVERS):
+        return {"ok": False, "reason": f"❌ ชื่อผู้รับไม่ตรง (พบ: {receiver or 'ไม่มี'})"}
+
+    # เช็คเวลา
+    dt_str = res.get("found_datetime")
+    if dt_str:
+        try:
+            slip_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=TH)
+            if (now_th - slip_dt).total_seconds() > 1800:
+                return {"ok": False, "reason": f"❌ สลิปเกิน 30 นาที (เวลาสลิป: {dt_str})"}
+        except Exception:
+            pass
+
+    used_slip_hashes.add(slip_hash)
+    return {
+        "ok":        True,
+        "amount":    float(amt),
+        "receiver":  receiver,
+        "slip_time": dt_str or "-",
+    }
+
+
+# ─────────────────────────────────────────
+#  ROUTER: เลือก verify ตาม payment_method
+# ─────────────────────────────────────────
+async def verify_slip(image_url: str, expected_amount: int, payment_method: str) -> dict:
+    if payment_method == "truemoney":
+        return await verify_truemoney_slip(image_url, expected_amount)
+    else:
+        return await verify_bank_slip(image_url, expected_amount)
+
+
+# ─────────────────────────────────────────
 #  BOT
 # ─────────────────────────────────────────
 intents = discord.Intents.default()
@@ -247,7 +360,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ─────────────────────────────────────────
 class SelectReshadeView(discord.ui.View):
     def __init__(self, order_id: str):
-        super().__init__(timeout=None)  # ← None เพื่อ survive restart
+        super().__init__(timeout=None)
         self.add_item(ReshadeSelectMenu(order_id))
 
 
@@ -267,7 +380,6 @@ class ReshadeSelectMenu(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        # restore order_id จาก footer ถ้า bot restart
         order_id = self.order_id or _get_order_id("", interaction)
         order = pending_orders.get(order_id)
         if not order:
@@ -320,9 +432,7 @@ class PaymentView(discord.ui.View):
         o["status"]         = "waiting_slip"
         total = o["total_price"]
 
-        # defer ก่อน เพราะ generate QR อาจใช้เวลา
         await interaction.response.defer()
-
         qr_bytes = await generate_promptpay_qr(total)
 
         embed = discord.Embed(
@@ -345,16 +455,13 @@ class PaymentView(discord.ui.View):
             embed.set_image(url="attachment://promptpay_qr.png")
             embed.set_footer(text=f"order:{order_id} | QR PromptPay ยอดรวม ฿{total}")
             await interaction.edit_original_response(
-                embed=embed,
-                attachments=[qr_file],
-                view=CancelView(order_id),
+                embed=embed, attachments=[qr_file], view=CancelView(order_id),
             )
         else:
             embed.set_image(url=PAYMENT_IMAGE_URL)
             embed.set_footer(text=f"order:{order_id}")
             await interaction.edit_original_response(
-                embed=embed,
-                view=CancelView(order_id),
+                embed=embed, view=CancelView(order_id),
             )
 
     @discord.ui.button(label="💰 TrueMoney Wallet", style=discord.ButtonStyle.success, custom_id="payment_truemoney")
@@ -377,7 +484,7 @@ class PaymentView(discord.ui.View):
                 f"```\nเบอร์รับเงิน : {TRUE_NUMBER}\n```\n"
                 f"🔖 **Order ID :** `{order_id}`\n\n"
                 "📸 **ส่งรูปสลิปในห้องนี้ได้เลย**\n"
-                "> ระบบตรวจอัตโนมัติ ~10 วินาที"
+                "> ระบบตรวจอัตโนมัติ ~15 วินาที"
             ),
             color=PURPLE,
         )
@@ -433,8 +540,7 @@ async def _start_order(interaction: discord.Interaction):
         existing = interaction.guild.get_thread(existing_thread_id)
         if existing:
             return await interaction.response.send_message(
-                f"❗ คุณมี order ค้างอยู่แล้ว → {existing.mention}",
-                ephemeral=True
+                f"❗ คุณมี order ค้างอยู่แล้ว → {existing.mention}", ephemeral=True
             )
         else:
             user_threads.pop(member.id, None)
@@ -512,18 +618,14 @@ async def grant_reshade_and_finish(thread, guild, member, order_id, ocr, method,
         for label in chosen_labels:
             ch_env = DOWN_ROLE_CHANNELS.get(label)
             ch_id  = int(os.getenv(ch_env, "0")) if ch_env else 0
-            if ch_id:
-                dm_lines.append(f"🎮 **{label}** → <#{ch_id}>")
-            else:
-                dm_lines.append(f"🎮 **{label}** → (ไม่ได้ตั้งค่าห้อง)")
+            dm_lines.append(f"🎮 **{label}** → {'<#' + str(ch_id) + '>' if ch_id else '(ไม่ได้ตั้งค่าห้อง)'}")
 
         await member.send(embed=discord.Embed(
             title="<a:1134verifiedanimated:1495470992452227103> ได้รับยศ Reshade แล้ว!",
             description=(
                 f"**Order ID:** `{order_id}`\n\n"
                 f"ยศที่ได้รับ:\n{chosen_labels_text}\n\n"
-                "เข้าห้องได้เลยครับ:\n"
-                + "\n".join(dm_lines) +
+                "เข้าห้องได้เลยครับ:\n" + "\n".join(dm_lines) +
                 "\n\nขอบคุณที่ใช้บริการ **INSIDEX** 🙏"
             ),
             color=PURPLE,
@@ -603,7 +705,7 @@ async def on_ready():
     load_state()
     print(f"✅ INSIDEX Bot: {bot.user}")
     bot.add_view(ShopEmbedView())
-    bot.add_view(SelectReshadeView(""))  # ← เพิ่ม: restore หลัง restart
+    bot.add_view(SelectReshadeView(""))
     bot.add_view(PaymentView(""))
     bot.add_view(CancelView(""))
     asyncio.ensure_future(cleanup_expired_orders())
@@ -632,20 +734,25 @@ async def on_message(message: discord.Message):
             if entry:
                 order_id, order = entry
                 order["status"] = "verifying"
+                method = order["payment_method"]
 
                 checking_msg = await message.reply(embed=discord.Embed(
                     title="🔍 กำลังตรวจสอบสลิป...",
-                    description="> กำลังอ่านข้อมูล\n> กรุณารอสักครู่ (~10 วินาที)",
+                    description=(
+                        "> กำลังอ่านข้อมูล\n"
+                        "> กรุณารอสักครู่ "
+                        f"({'~10' if method == 'bank' else '~15'} วินาที)"
+                    ),
                     color=PURPLE,
                 ))
 
-                ocr = await ocr_slip(att.url, order["total_price"])
+                # route ตาม payment_method
+                ocr = await verify_slip(att.url, order["total_price"], method)
 
                 if ocr["ok"]:
                     order["status"] = "completed"
                     chosen_labels = order["chosen_labels"]
                     chosen_envs   = order["chosen_envs"]
-                    method        = order["payment_method"]
                     pending_orders.pop(order_id, None)
                     save_state()
 
